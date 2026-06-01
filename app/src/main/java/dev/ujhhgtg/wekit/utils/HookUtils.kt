@@ -1,5 +1,3 @@
-@file:Suppress("NOTHING_TO_INLINE")
-
 package dev.ujhhgtg.wekit.utils
 
 import com.highcapable.kavaref.resolver.MethodResolver
@@ -12,11 +10,6 @@ import java.lang.reflect.Method
 typealias HookAction = IHookBridge.IMemberHookParam.() -> Unit
 
 // most extension methods are inside BaseHookItem for enabled state checking
-
-inline fun MethodResolver<*>.applyHook(
-    hook: IHookBridge.IMemberHookCallback,
-    priority: Int = 50
-) = StartupInfo.hookBridge!!.hookMethod(self, hook, priority)
 
 inline fun MethodResolver<*>.hookBeforeDirectly(
     priority: Int = 50,
@@ -54,7 +47,7 @@ inline fun Executable.hookAfterDirectly(
     }, priority
 )
 
-@Suppress("ARGUMENT_TYPE_MISMATCH") // type is erased at compile-time anyways
+@Suppress("NOTHING_TO_INLINE", "ARGUMENT_TYPE_MISMATCH") // type is erased at compile-time anyways
 fun IHookBridge.IMemberHookParam.invokeOriginal(thisObject: Any? = null, args: Array<Any?>? = null): Any? = when (member) {
     is Method -> StartupInfo.hookBridge!!.invokeOriginalMethod(member as Method, thisObject ?: this.thisObject, args ?: this.args)
     is Constructor<*> -> StartupInfo.hookBridge!!.invokeOriginalConstructor(member as Constructor<*>, thisObject ?: this.thisObject, args ?: this.args)

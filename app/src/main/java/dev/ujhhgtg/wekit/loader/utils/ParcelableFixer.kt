@@ -2,13 +2,11 @@ package dev.ujhhgtg.wekit.loader.utils
 
 import android.content.Intent
 import android.os.Bundle
+import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XposedHelpers
 import dev.ujhhgtg.comptime.This
-import dev.ujhhgtg.wekit.loader.abc.IHookBridge
 import dev.ujhhgtg.wekit.utils.WeLogger
-import dev.ujhhgtg.wekit.utils.applyHook
-import dev.ujhhgtg.wekit.utils.reflection.BString
 import dev.ujhhgtg.wekit.utils.reflection.ClassLoaders
-import dev.ujhhgtg.wekit.utils.reflection.asResolver
 
 object ParcelableFixer {
 
@@ -37,30 +35,65 @@ object ParcelableFixer {
     }
 
     private fun hookIntentMethods() {
-        val hook = object : IHookBridge.IMemberHookCallback {
-            override fun beforeHookedMember(param: IHookBridge.IMemberHookParam) {
+        val hook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
                 (param.thisObject as? Intent)?.let { fixIntentExtrasClassLoader(it) }
             }
 
-            override fun afterHookedMember(param: IHookBridge.IMemberHookParam) {
+            override fun afterHookedMethod(param: MethodHookParam) {
                 val cl = hybridClassLoader
                 (param.result as? Bundle)?.classLoader = cl
             }
         }
 
         runCatching {
-            Intent::class.asResolver().apply {
-                firstMethod { name = "getExtras" }.applyHook(hook)
-
-                val clazz = Class::class.java
-                firstMethod { name = "getBundleExtra"; parameters(BString) }.applyHook(hook)
-                firstMethod { name = "getParcelableExtra"; parameters(BString) }.applyHook(hook)
-                firstMethod { name = "getParcelableArrayListExtra"; parameters(BString) }.applyHook(hook)
-                firstMethod { name = "getSerializableExtra"; parameters(BString) }.applyHook(hook)
-                firstMethod { name = "getParcelableExtra"; parameters(BString, clazz) }.applyHook(hook)
-                firstMethod { name = "getParcelableArrayListExtra"; parameters(BString, clazz) }.applyHook(hook)
-                firstMethod { name = "getSerializableExtra"; parameters(BString, clazz) }.applyHook(hook)
-            }
+            XposedHelpers.findAndHookMethod(Intent::class.java, "getExtras", hook)
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getBundleExtra",
+                String::class.java,
+                hook
+            )
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getParcelableExtra",
+                String::class.java,
+                hook
+            )
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getParcelableArrayListExtra",
+                String::class.java,
+                hook
+            )
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getSerializableExtra",
+                String::class.java,
+                hook
+            )
+            // Android 13+
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getParcelableExtra",
+                String::class.java,
+                Class::class.java,
+                hook
+            )
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getParcelableArrayListExtra",
+                String::class.java,
+                Class::class.java,
+                hook
+            )
+            XposedHelpers.findAndHookMethod(
+                Intent::class.java,
+                "getSerializableExtra",
+                String::class.java,
+                Class::class.java,
+                hook
+            )
         }.onFailure { WeLogger.w(TAG, "failed to hook some Intent methods: ${it.message}") }
     }
 }
