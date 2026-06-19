@@ -1,19 +1,17 @@
-# 目录
+# Table of contents
 
 * [👋 欢迎](README.md)
 * [🚀 快速开始](getting-started.md)
 * [📥 安装指南](installation.md)
 * [⚙️ 配置指南](configuration.md)
 * [🔧 模块设置说明](module-settings.md)
-* [🛠 开发指南](development.md)
+* [🛠️ 开发指南](development.md)
 * [❓ 常见问题](faq.md)
 * [🐛 问题反馈指南](bug-report-guide.md)
 * [⭐ 建议反馈指南](feature-request-guide.md)
-* [🛡 免责声明](cosmic-level-disclaimer.md)
+* [🛡️ 免责声明](cosmic-level-disclaimer.md)
 
-## 功能文档
-
-### 聊天功能
+## 聊天功能
 
 * [阻止消息撤回 1](features/chat/anti-message-recall-1.md)
 * [阻止消息撤回 3](features/chat/anti-message-recall-3.md)
@@ -55,7 +53,7 @@
 * [显隐全部对话](features/chat/toggle-all-conversations-visibility.md)
 * [虚拟视频通话](features/chat/virtual-voip-video.md)
 
-### 联系人与群组
+## 联系人与群组
 
 * [自定义好友本地头像](features/contacts/custom-local-friend-avatars.md)
 * [检测单向删除好友](features/contacts/detect-deleted-friends.md)
@@ -69,7 +67,7 @@
 * [显示微信 ID](features/contacts/show-wx-id-in-contact-details.md)
 * [分裂群组](features/contacts/split-group-chats.md)
 
-### 朋友圈
+## 朋友圈
 
 * [拦截朋友圈删除](features/moments/anti-moments-delete.md)
 * [朋友圈底部详细信息](features/moments/display-details.md)
@@ -79,7 +77,7 @@
 * [单击不关闭视频播放器](features/moments/no-close-video-player-on-click.md)
 * [拦截朋友圈广告](features/moments/remove-moments-ads.md)
 
-### 红包与支付
+## 红包与支付
 
 * [允许领取私聊红包](features/payment/allow-private-chat-receive-outgoing-red-packets.md)
 * [自动接收转账](features/payment/auto-accept-transfers.md)
@@ -88,7 +86,7 @@
 * [修改转账显示余额](features/payment/modify-transfer-wallet-balance-display.md)
 * [修改显示余额](features/payment/modify-wallet-balance-display.md)
 
-### 界面美化
+## 界面美化
 
 * [主屏幕添加 FAB](features/beautify/add-main-screen-fab.md)
 * [对话框窗口级背景模糊](features/beautify/apply-dialog-background-blur.md)
@@ -100,7 +98,7 @@
 * [莫奈引擎](features/beautify/monet-engine.md)
 * [美化首页底部导航栏](features/beautify/replace-navigation-bar.md)
 
-### 系统与隐私
+## 系统与隐私
 
 * [API 服务器](features/system/api-server.md)
 * [自动批准设备登录](features/system/auto-approve-device-login.md)
@@ -128,16 +126,16 @@
 * [环境伪装](features/system/spoof-environment.md)
 * [恢复旧版卡包界面](features/system/use-legacy-wallet-view.md)
 
-### 通知
+## 通知
 
 * [通知进化](features/notifications/notifications-evolved.md)
 
-### 公众号
+## 公众号
 
 * [恢复旧版公众号列表](features/official_accounts/use-legacy-official-accounts-view.md)
 * [允许公众号网页多开](features/official_accounts/use-multi-webview-for-official-accounts.md)
 
-### 小程序
+## 小程序
 
 * [移除嵌入广告](features/miniapps/remove-embedded-ads.md)
 * [去除菜单限制](features/miniapps/remove-menu-limits.md)
@@ -146,18 +144,18 @@
 * [跳过启动页面](features/miniapps/skip-splash.md)
 * [伪装宿主版本](features/miniapps/spoof-host-version.md)
 
-### 视频号
+## 视频号
 
 * [禁用评论长度限制](features/shortvideos/disable-comment-size-limit.md)
 * [下载媒体](features/shortvideos/download-media.md)
 
-### 个人资料
+## 个人资料
 
 * [移除个性签名限制](features/profile/remove-signature-limits.md)
 * [设置微信昵称](features/profile/set-profile-nickname.md)
 * [上传透明头像](features/profile/upload-transparent-avatars.md)
 
-### 脚本引擎
+## 脚本引擎
 
 * [脚本引擎 API 参考](features/scripting_js/js-api-reference.md)
 * [脚本引擎](features/scripting_js/js-scripting-hook.md)
@@ -165,7 +163,7 @@
 * [触发器: 发起请求](features/scripting_js/on-request.md)
 * [触发器: 收到响应](features/scripting_js/on-response.md)
 
-### 调试
+## 调试
 
 * [复制调试信息](features/debug/copy-wechat-debug-info.md)
 * [崩溃拦截](features/debug/crash-interceptor.md)
@@ -179,11 +177,11 @@
 * [发包调试](features/debug/send-packet.md)
 * [测试崩溃](features/debug/trigger-crash.md)
 
-### 娱乐
+## 娱乐
 
 * [清空资料信息](features/entertain/clear-profile-details.md)
 * [防止封号](features/entertain/troll-ban.md)
 
-### 彩蛋
+## 彩蛋
 
 * [愚人节彩蛋](features/easter_egg/april-fools.md)
