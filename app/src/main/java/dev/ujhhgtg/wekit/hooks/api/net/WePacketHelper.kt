@@ -554,7 +554,7 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                             if (rrObj != null) {
                                 val respWrapper = rrObj.reflekt().getField("b")!!
                                 val protoObj = respWrapper.reflekt().getField("a")!!
-                                bytes = protoObj.reflekt().invokeMethod("toByteArray") as? ByteArray
+                                bytes = protoObj.reflekt().firstMethod { name ="toByteArray"; superclass() }.invoke() as? ByteArray
                                 if (bytes != null) {
                                     json = WeProtoData.fromBytes(bytes).toJsonObject().toString()
                                 }
@@ -590,8 +590,8 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                         val respWrapper = reqResp.reflekt().getField("b")!!
                         val yd = respWrapper.reflekt().getField("a")!!
                         val bytes = runCatching {
-                            yd.reflekt().invokeMethod("initialProtobufBytes") as? ByteArray
-                        }.getOrElse { yd.reflekt().invokeMethod("toByteArray") as? ByteArray }
+                            yd.reflekt().firstMethod { name = "initialProtobufBytes"; superclass() }.invoke() as? ByteArray
+                        }.getOrElse { yd.reflekt().firstMethod { name = "toByteArray"; superclass() }.invoke() as? ByteArray }
                         val json =
                             if (bytes != null) WeProtoData.fromBytes(bytes)
                                 .toJsonObject()

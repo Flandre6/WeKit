@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Debug
 import android.os.Process
 import dev.ujhhgtg.comptime.This
+import dev.ujhhgtg.wekit.BuildConfig
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.polyfills.getThreadId
 import java.io.BufferedReader
@@ -37,29 +38,33 @@ object CrashInfoCollector {
 
         val sb = "========================================\n" +
                 "WeKit Crash Report\n" +
-                "========================================\n\n" +  // 崩溃时间
+                "========================================\n\n" +
                 "Crash Time: " + currentTime + "\n" +
-                "Crash Type: " + crashType + "\n\n" +  // 设备信息
+                "Crash Type: " + crashType + "\n\n" +
                 "========================================\n" +
                 "Device Information\n" +
                 "========================================\n" +
-                collectDeviceInfo() + "\n" +  // 应用信息
+                collectDeviceInfo() + "\n" +
                 "========================================\n" +
                 "Application Information\n" +
                 "========================================\n" +
-                collectAppInfo(context) + "\n" +  // 内存信息
+                collectAppInfo(context) + "\n" +
+                "========================================\n" +
+                "Module Information\n" +
+                "========================================\n" +
+                collectModuleInfo() + "\n" +
                 "========================================\n" +
                 "Memory Information\n" +
                 "========================================\n" +
-                collectMemoryInfo(context) + "\n" +  // 线程信息
+                collectMemoryInfo(context) + "\n" +
                 "========================================\n" +
                 "Thread Information\n" +
                 "========================================\n" +
-                collectThreadInfo() + "\n" +  // 异常堆栈
+                collectThreadInfo() + "\n" +
                 "========================================\n" +
                 "Exception Stack Trace\n" +
                 "========================================\n" +
-                getStackTraceString(throwable) + "\n" +  // 所有线程堆栈
+                getStackTraceString(throwable) + "\n" +
                 "========================================\n" +
                 "All Threads Stack Trace\n" +
                 "========================================\n" +
@@ -125,6 +130,13 @@ object CrashInfoCollector {
             sb.append("Failed to collect app info: ").append(e.message).append("\n")
         }
         return sb.toString()
+    }
+
+    private fun collectModuleInfo(): String {
+        return buildString {
+            appendLine("Version Name: ${BuildConfig.VERSION_NAME}")
+            appendLine("Version Code: ${BuildConfig.VERSION_CODE}")
+        }
     }
 
     /**
