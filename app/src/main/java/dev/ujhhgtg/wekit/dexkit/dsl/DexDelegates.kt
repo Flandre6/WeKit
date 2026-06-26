@@ -9,10 +9,13 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.reflection.ClassLoaders
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.FindClass
+import org.luckypray.dexkit.query.FindField
 import org.luckypray.dexkit.query.FindMethod
 import org.luckypray.dexkit.result.ClassData
+import org.luckypray.dexkit.result.FieldData
 import org.luckypray.dexkit.result.MethodData
 import java.lang.reflect.Constructor
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 import kotlin.properties.PropertyDelegateProvider
 import kotlin.properties.ReadOnlyProperty
@@ -113,6 +116,100 @@ class DexClassDelegate internal constructor(
     }
 
     override fun getValue(thisRef: BaseHookItem, property: KProperty<*>): DexClassDelegate = this
+}
+
+// ---------------------------------------------------------------------------
+// DexFieldDelegate
+// ---------------------------------------------------------------------------
+
+/**
+ * Dex 字段委托 — 自动生成 Key，自动反射获取 Field。
+ */
+class DexFieldDelegate internal constructor(
+    override val key: String
+) : ReadOnlyProperty<BaseHookItem, DexFieldDelegate>, BaseDexDelegate {
+
+    private var descriptorString: String? = null
+    private var cachedField: Field? = null
+
+    val field: Field
+        get() {
+            if (descriptorString == PLACEHOLDER_DESCRIPTOR)
+                error("Field resolution has failed: $key")
+            if (cachedField == null && descriptorString != null)
+                cachedField = getFieldInstance(descriptorString!!)
+            return cachedField ?: error("Field not found for key: $key")
+        }
+
+    fun setDescriptor(desc: String) {
+        descriptorString = desc
+        cachedField = null
+    }
+
+    @Suppress("unused")
+    fun setDescriptor(f: FieldData) {
+        setDescriptor(f.descriptor)
+    }
+
+    fun setPlaceholderDescriptor() {
+        WeLogger.w(nameOf(DexFieldDelegate::class), "setting placeholder for $key")
+        setDescriptor(PLACEHOLDER_DESCRIPTOR)
+    }
+
+    val isPlaceholder
+        get() = descriptorString == PLACEHOLDER_DESCRIPTOR
+
+    override fun getDescriptorString(): String? = descriptorString
+    override fun loadDescriptor(value: String) = setDescriptor(value)
+
+    fun find(
+        dexKit: DexKitBridge,
+        allowMultiple: Boolean = false,
+        allowFailure: Boolean = false,
+        resultIndex: Int = 0,
+        block: FindField.() -> Unit
+    ): Boolean {
+        val results = dexKit.findField(block)
+
+        if (results.isEmpty()) {
+            if (!allowFailure) error("DexKit: No field found for key: $key")
+            setPlaceholderDescriptor()
+            return false
+        }
+        if (results.size > 1 && !allowMultiple)
+            error(
+                "DexKit: Multiple fields found for key: $key, count: ${results.size}, fields:${
+                    results.map { "${it.className}::${it.fieldName}" }
+                }"
+            )
+
+        setDescriptor(results[resultIndex].descriptor)
+        return true
+    }
+
+    override fun getValue(thisRef: BaseHookItem, property: KProperty<*>): DexFieldDelegate = this
+
+    private fun getFieldInstance(descriptor: String): Field {
+        val arrow = descriptor.indexOf("->")
+        val colon = descriptor.indexOf(':', arrow)
+        require(arrow >= 0 && colon >= 0) { descriptor }
+        val className = descriptor.substring(1, arrow - 1).replace('/', '.')
+        val fieldName = descriptor.substring(arrow + 2, colon)
+        var current: Class<*>? = ClassLoaders.HOST.loadClass(className)
+        while (current != null) {
+            try {
+                return current.getDeclaredField(fieldName).apply { isAccessible = true }
+            } catch (_: NoSuchFieldException) {
+                current = current.superclass
+            }
+        }
+        throw NoSuchFieldException(descriptor)
+    }
+
+    companion object {
+        private const val PLACEHOLDER_DESCRIPTOR =
+            "Lcom/tencent/mm/ui/LauncherUI;->INSTANCE:Lcom/tencent/mm/ui/LauncherUI;"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +407,15 @@ fun dexClass(): PropertyDelegateProvider<BaseHookItem, ReadOnlyProperty<BaseHook
     PropertyDelegateProvider { item, property ->
         val key = "${item::class.simpleName}:${property.name}"
         DexClassDelegate(key).also { item.registerDexDelegate(it) }
+    }
+
+/**
+ * 创建 dexField 委托，并将其注册到所属 HookItem 的委托列表中。
+ */
+fun dexField(): PropertyDelegateProvider<BaseHookItem, ReadOnlyProperty<BaseHookItem, DexFieldDelegate>> =
+    PropertyDelegateProvider { item, property ->
+        val key = "${item::class.simpleName}:${property.name}"
+        DexFieldDelegate(key).also { item.registerDexDelegate(it) }
     }
 
 /**

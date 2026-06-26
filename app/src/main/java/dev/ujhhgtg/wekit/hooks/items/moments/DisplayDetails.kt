@@ -24,9 +24,10 @@ import com.tencent.mm.ui.widget.imageview.WeImageView
 import com.tencent.mm.view.recyclerview.WxRecyclerView
 import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.reflekt.utils.makeAccessible
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
+import dev.ujhhgtg.wekit.dexkit.dsl.dexField
+import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.hooks.core.ClickableHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
@@ -41,7 +42,7 @@ import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
 import dev.ujhhgtg.wekit.utils.formatEpoch
-import java.lang.reflect.Field
+import org.luckypray.dexkit.DexKitBridge
 import java.util.Locale
 
 @HookItem(
@@ -56,7 +57,7 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
     private var timeFormat by prefOption("moments_details_time_format", DEFAULT_TIME_FORMAT)
     private var hideGroupIcon by prefOption("moments_details_hide_group", false)
 
-    private const val DEFAULT_TEXT_FORMAT = $$"${originalText} | ${time} "
+    private const val DEFAULT_TEXT_FORMAT = $$"${time} | ${originalText}"
     private const val DEFAULT_TIME_FORMAT = "yyyy-MM-dd HH:mm:ss"
 
     private const val PH_ORIGINAL = $$"${originalText}"
@@ -65,15 +66,12 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
     private const val PH_SNS_ID = $$"${snsId}"
     private const val PH_USER_NAME = $$"${userName}"
 
-    private const val TAG_ORIGINAL_TEXT = 0x55070001
-    private const val TAG_PROCESSED_SNS_ID = 0x55070002
     private const val TAG_LIST_ATTACHED = 0x55070003
 
-    private val TIME_MARKERS = listOf(
-        "分钟", "小时", "刚刚", "天", "前",
-        "min", "hour", "hr", "yesterday", "day", "ago"
+    private val TIMESTAMP_REGEX = Regex(
+        """^\d+分钟前$|^\d+小时前$|^\d+天前$|^刚刚$|^昨天$|^\d+\s*mins?\s*ago$|^\d+\s*hrs?\s*ago$|^\d+\s*days?\s*ago$|^yesterday$""",
+        RegexOption.IGNORE_CASE
     )
-    private val timeRegex = Regex("""\d{1,2}[:：]\d{2}""")
 
     override fun onEnable() {
         listOf(
@@ -86,6 +84,16 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
             val activity = thisObject as Activity
             scheduleAttach(activity)
         } }
+
+        if (!methodGetTimeString.isPlaceholder) methodGetTimeString.hookAfter {
+            val snsInfo = thisObject
+            val snsId = (fieldSnsId.field.get(snsInfo) as? Number)?.toLong() ?: return@hookAfter
+            val userName = (fieldUserName.field.get(snsInfo) as? String).orEmpty()
+            val createTime = (fieldCreateTime.field.get(snsInfo) as? Number)?.toInt() ?: 0
+            val type = (fieldType.field.get(snsInfo) as? Number)?.toInt() ?: 0
+            val originalText = result as? String ?: ""
+            result = buildBottomText(snsId, userName, createTime, type, originalText)
+        }
     }
 
     override fun onClick(context: Context) {
@@ -141,32 +149,6 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
         }
     }
 
-    // ── field cache ──────────────────────────────────────────────────────────
-
-    private lateinit var snsIdField: Field
-    private lateinit var userNameField: Field
-    private lateinit var createTimeField: Field
-    private lateinit var typeField: Field
-
-    private fun ensureFields(snsInfo: Any) {
-        if (!::snsIdField.isInitialized) {
-            snsIdField = snsInfo.reflekt()
-                .firstField { name = "field_snsId"; superclass() }.self.makeAccessible()
-        }
-        if (!::userNameField.isInitialized) {
-            userNameField = snsInfo.reflekt()
-                .firstField { name = "field_userName"; superclass() }.self.makeAccessible()
-        }
-        if (!::createTimeField.isInitialized) {
-            createTimeField = snsInfo.reflekt()
-                .firstField { name = "field_createTime"; superclass() }.self.makeAccessible()
-        }
-        if (!::typeField.isInitialized) {
-            typeField = snsInfo.reflekt()
-                .firstField { name = "field_type"; superclass() }.self.makeAccessible()
-        }
-    }
-
     private fun scheduleAttach(activity: Activity) {
         val root = activity.rootView
         intArrayOf(0, 200, 800, 2000).forEach { delay ->
@@ -189,38 +171,38 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
     }
 
     private fun processItemView(itemView: View) {
-        val snsInfo = locateSnsInfo(itemView)
-        ensureFields(snsInfo)
+        val snsInfo = locateSnsInfo(itemView) ?: return
 
-        val snsId = (snsIdField.get(snsInfo) as? Number)?.toLong() ?: return
-        val userName = (userNameField.get(snsInfo) as? String).orEmpty()
-        val createTime = (createTimeField.get(snsInfo) as? Number)?.toInt() ?: 0
-        val type = (typeField.get(snsInfo) as? Number)?.toInt() ?: 0
+        val snsId = (fieldSnsId.field.get(snsInfo) as? Number)?.toLong() ?: return
+        val userName = (fieldUserName.field.get(snsInfo) as? String).orEmpty()
+        val createTime = (fieldCreateTime.field.get(snsInfo) as? Number)?.toInt() ?: 0
+        val type = (fieldType.field.get(snsInfo) as? Number)?.toInt() ?: 0
 
+        val timeText = formatEpoch(createTime.toLong() * 1000, timeFormat)
         val itemGroup = itemView as ViewGroup
         val timeTextView = itemGroup.findViewWhich<TextView> { view ->
-            view is TextView && view.isVisible &&
-                run {
-                    val text = view.text.toString().lowercase()
-                    TIME_MARKERS.any { it in text }
-                } }!!
+            if (view !is TextView || !view.isVisible) return@findViewWhich false
+            val text = view.text?.toString().orEmpty()
+            TIMESTAMP_REGEX.matches(text.trim()) || (timeText.isNotEmpty() && text.contains(timeText))
+        } ?: return
 
-        val markedSnsId = timeTextView.getTag(TAG_PROCESSED_SNS_ID) as? Long
-        if (markedSnsId != snsId) {
-            val originalText = timeTextView.text?.toString().orEmpty()
-            timeTextView.setTag(TAG_PROCESSED_SNS_ID, snsId)
-            timeTextView.setTag(TAG_ORIGINAL_TEXT, originalText)
-            timeTextView.text = buildBottomText(
+        // The getTimeString hook keeps the time view on the detail text; only fill the bare relative-time gap here.
+        val originalText = timeTextView.text?.toString().orEmpty()
+        if (TIMESTAMP_REGEX.matches(originalText.trim())) {
+            val built = buildBottomText(
                 snsId = snsId,
                 userName = userName,
                 createTime = createTime,
                 type = type,
                 originalText = originalText
             )
+            if (originalText != built) {
+                timeTextView.text = built
+            }
         }
 
         if (hideGroupIcon) {
-            val buttons = (timeTextView.parent as ViewGroup).findViewsWhich<View> {
+            val buttons = (timeTextView.parent as? ViewGroup).findViewsWhich<View> {
                 it is WeImageView
             }.toList()
             if (buttons.size > 1) {
@@ -248,28 +230,84 @@ object DisplayDetails : ClickableHookItem(), IResolveDex {
             .replace(PH_USER_NAME, userName)
     }
 
-    private val classImproveSnsInfo by dexClass {
-        matcher {
-            usingEqStrings("ImproveInfo(name=")
+    // ── DexKit delegates ─────────────────────────────────────────────────
+
+    private val classImproveSnsInfo by dexClass()
+
+    private val classImproveInteractionLayout by dexClass()
+
+    private val fieldInteractionSnsInfo by dexField()
+
+    private val fieldSnsId by dexField()
+
+    private val fieldUserName by dexField()
+
+    private val fieldCreateTime by dexField()
+
+    private val fieldType by dexField()
+
+    private val methodGetTimeString by dexMethod()
+
+    override fun resolveDex(dexKit: DexKitBridge) {
+        classImproveSnsInfo.find(dexKit) {
+            matcher {
+                usingEqStrings("ImproveInfo(name=")
+            }
+        }
+
+        classImproveInteractionLayout.find(dexKit) {
+            matcher {
+                usingEqStrings("MicroMsg.Improve.InteractionLayout")
+            }
+        }
+
+        fieldInteractionSnsInfo.find(dexKit) {
+            matcher {
+                declaredClass(classImproveInteractionLayout.clazz)
+                type(classImproveSnsInfo.clazz)
+            }
+        }
+
+        val fieldOwner = classImproveSnsInfo.clazz.superclass
+            ?: error("superclass of ImproveSnsInfo not found")
+        fieldSnsId.find(dexKit) {
+            matcher {
+                declaredClass(fieldOwner)
+                name = "field_snsId"
+            }
+        }
+        fieldUserName.find(dexKit) {
+            matcher {
+                declaredClass(fieldOwner)
+                name = "field_userName"
+            }
+        }
+        fieldCreateTime.find(dexKit) {
+            matcher {
+                declaredClass(fieldOwner)
+                name = "field_createTime"
+            }
+        }
+        fieldType.find(dexKit) {
+            matcher {
+                declaredClass(fieldOwner)
+                name = "field_type"
+            }
+        }
+
+        methodGetTimeString.find(dexKit, allowFailure = true) {
+            matcher {
+                declaredClass(classImproveSnsInfo.clazz)
+                usingEqStrings("getTimeString")
+            }
         }
     }
 
-    private val classImproveSnsInfoWrapper by dexClass {
-        matcher {
-            usingEqStrings("getViewType", "com.tencent.mm.plugin.sns.ui.improve.util.ImproveTypeUtil")
-        }
-    }
+    private fun locateSnsInfo(itemView: View): Any? {
+        val interactionView = itemView.findViewWhich<View> {
+            classImproveInteractionLayout.clazz.isInstance(it)
+        } ?: return null
 
-    private fun locateSnsInfo(itemView: View): Any {
-        val wrapper = itemView.reflekt().firstField {
-            type = "com.tencent.mm.plugin.sns.ui.improve.view.ImproveInteractionLayout"
-            superclass()
-        }.get() ?: itemView.reflekt().firstField {
-            type = classImproveSnsInfoWrapper.clazz
-            superclass()
-        }.get()!!
-
-        return wrapper.reflekt()
-            .firstField { type = classImproveSnsInfo.clazz }.get()!!
+        return fieldInteractionSnsInfo.field.get(interactionView)
     }
 }
