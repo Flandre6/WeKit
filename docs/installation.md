@@ -9,7 +9,9 @@
 
 [GitHub Releases](https://github.com/Ujhhgtg/WeKit/releases) 中会发布"稳定的 CI", 但不保证真的稳定, 且可能无法享受最新功能与修复, 故建议使用每夜版。
 
-## 安装 (Root, 以 [LSPosed](https://github.com/JingMatrix/Vector) 为例)
+## 安装
+
+### Root (以 [LSPosed](https://github.com/JingMatrix/Vector) 为例)
 
 1. 下载模块安装包
 2. 安装模块
@@ -17,7 +19,7 @@
    - 若 LSPosed 提示「此模块是为较新的 Xposed 版本设计的, 因此某些功能可能无法使用」, 忽略即可, 不影响模块使用
 4. 重启微信
 
-## 安装 (免 Root, 以 [NPatch](https://github.com/7723mod/NPatch) 为例)
+### 免 Root (以 [NPatch](https://github.com/7723mod/NPatch) 为例)
 
 1. 下载模块与 NPatch 管理器安装包
 2. 安装模块与 NPatch 管理器
@@ -36,7 +38,7 @@
 3. 右上角三个点菜单 -> 「修复模块加载」 -> 确定
 4. 重启微信
 
-### 免 Root (需修补时启用「注入文件提供器」; 以 MT 管理器为例)
+### 免 Root (需「注入文件提供器」; 以 MT 管理器为例)
 
 1. 启动 MT 管理器
 2. 左上角菜单 -> 右上角三个点菜单 -> 添加本地存储

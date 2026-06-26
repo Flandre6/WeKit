@@ -418,9 +418,9 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                 // 发送逻辑
                 if (nativeNetScene != null) {
                     val netQueue = classMmKernel.clazz.reflekt().invokeMethod(
-                        methodGetNetQueue.method.name, null
+                        methodGetNetQueue.method.name, null, superclass = true
                     )!!
-                    val cgiType = nativeNetScene.reflekt().invokeMethod("getType") as Int
+                    val cgiType = nativeNetScene.reflekt().invokeMethod("getType", superclass = true) as Int
 
                     val callbackProxy = Proxy.newProxyInstance(
                         cl,
@@ -438,9 +438,9 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
 
                         if (method.name == "onSceneEnd" && args != null) {
                             try {
-                                netQueue.reflekt().invokeMethod("q", cgiType, proxy)
+                                netQueue.reflekt().invokeMethod("q", cgiType, proxy, superclass = true)
                             } catch (e: Throwable) {
-                                WeLogger.w(TAG, "failed to unregister native callback: ${e.message}")
+                                WeLogger.w(TAG, "failed to unregister native callback", e)
                             }
 
                             NativeResponseHandler(callback, successAction).invoke(
@@ -455,8 +455,8 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
 
                     // 注册并入队
                     netQueue.reflekt().apply {
-                        invokeMethod("a", cgiType, callbackProxy)
-                        invokeMethod("g", nativeNetScene)
+                        invokeMethod("a", cgiType, callbackProxy, superclass = true)
+                        invokeMethod("g", nativeNetScene, superclass = true)
                     }
 
                     WeLogger.i(TAG, "[$cgiId] native mode: successfully registered listener and added to queue")
@@ -470,7 +470,7 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
 
                     if (specificReqCls != null) {
                         finalReqObject = specificReqCls.createInstance()
-                        finalReqObject.reflekt().invokeMethod("parseFrom", bytes)
+                        finalReqObject.reflekt().invokeMethod("parseFrom", bytes, superclass = true)
                         WeLogger.i(TAG, "[$cgiId] using specific class: ${specificReqCls.name}")
                     } else {
                         val rawCls = classRawReq.clazz
@@ -491,7 +491,7 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                         setField("n", bytes)
                     }
 
-                    val rr = builder.reflekt().invokeMethod("a")
+                    val rr = builder.reflekt().invokeMethod("a", superclass = true)
                     val cbProxy = Proxy.newProxyInstance(
                         cl,
                         arrayOf(classCallbackIface.clazz),
@@ -509,7 +509,6 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                         )
                     }.invoke(null, rr, cbProxy, false)
                 }
-
             } catch (e: Throwable) {
                 WeLogger.e(TAG, "[$cgiId] failed to send cgi", e)
                 Handler(Looper.getMainLooper()).post { callback?.onFailure(-1, -1, e.message ?: "") }
@@ -548,12 +547,12 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                             val rrObj = if (rrField != null) {
                                 rrField.get(netScene)
                             } else {
-                                netScene.reflekt().getField("d")
+                                netScene.reflekt().getField("d", superclass = true)
                             }
 
                             if (rrObj != null) {
-                                val respWrapper = rrObj.reflekt().getField("b")!!
-                                val protoObj = respWrapper.reflekt().getField("a")!!
+                                val respWrapper = rrObj.reflekt().getField("b", superclass = true)!!
+                                val protoObj = respWrapper.reflekt().getField("a", superclass = true)!!
                                 bytes = protoObj.reflekt().firstMethod { name ="toByteArray"; superclass() }.invoke() as? ByteArray
                                 if (bytes != null) {
                                     json = WeProtoData.fromBytes(bytes).toJsonObject().toString()
@@ -587,11 +586,11 @@ object WePacketHelper : ApiHookItem(), IResolveDex {
                 Handler(Looper.getMainLooper()).post {
                     if (errType == 0 && errCode == 0) {
                         successAction?.invoke()
-                        val respWrapper = reqResp.reflekt().getField("b")!!
-                        val yd = respWrapper.reflekt().getField("a")!!
+                        val respWrapper = reqResp.reflekt().getField("b", superclass = true)!!
+                        val yd = respWrapper.reflekt().getField("a", superclass = true)!!
                         val bytes = runCatching {
-                            yd.reflekt().firstMethod { name = "initialProtobufBytes"; superclass() }.invoke() as? ByteArray
-                        }.getOrElse { yd.reflekt().firstMethod { name = "toByteArray"; superclass() }.invoke() as? ByteArray }
+                            yd.reflekt().invokeMethod("initialProtobufBytes", superclass = true) as? ByteArray
+                        }.getOrElse { yd.reflekt().invokeMethod("toByteArray", superclass = true) as? ByteArray }
                         val json =
                             if (bytes != null) WeProtoData.fromBytes(bytes)
                                 .toJsonObject()

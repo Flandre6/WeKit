@@ -2,6 +2,25 @@
 
 package dev.ujhhgtg.wekit.hooks.api.core.models
 
+// type=0 post
+// type=1 plain text
+// type=3 image
+// type=34 voice
+// type=37 add friend request verification
+// type=40 friends you possible know
+// type=42 contact card
+// type=43 video
+// type=48 static location
+// type=49 app message
+// type=50 voip
+// type=51 app initialization
+// type=52 voip notification
+// type=53 voip invitation
+// type=419430449 cash transfer
+// type=436207665 red packet
+// type=1040187441 qq music
+// type=1090519089 file
+
 enum class MessageType(val code: Int, val displayName: String) {
     MOMENTS(0, "朋友圈"),
 

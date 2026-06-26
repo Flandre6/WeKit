@@ -16,32 +16,13 @@ import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 import kotlin.io.path.readText
 
-@HookItem(name = "脚本引擎", categories = ["脚本"], description = "执行 JavaScript 脚本")
+@HookItem(name = "脚本引擎", categories = ["脚本 (JavaScript)"], description = "执行 JavaScript 脚本")
 object JsScriptingHook : SwitchHookItem(),
     WeDatabaseListenerApi.IInsertListener, IWePacketInterceptor {
 
     private val TAG = This.Class.simpleName
 
     private val SCRIPTS_DIR = (KnownPaths.moduleData / "scripts").createDirectoriesNoThrow()
-
-    // type=0 post
-    // type=1 plain text
-    // type=3 image
-    // type=34 voice
-    // type=37 add friend request verification
-    // type=40 friends you possible know
-    // type=42 contact card
-    // type=43 video
-    // type=48 static location
-    // type=49 app message
-    // type=50 voip
-    // type=51 app initialization
-    // type=52 voip notification
-    // type=53 voip invitation
-    // type=419430449 cash transfer
-    // type=436207665 red packet
-    // type=1040187441 qq music
-    // type=1090519089 file
 
     val scripts = ConcurrentHashMap<String, String>()
 

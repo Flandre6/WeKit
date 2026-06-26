@@ -21,12 +21,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import dev.ujhhgtg.reflekt.utils.isSubclassOf
 import com.tencent.mm.plugin.voip.widget.VoipForegroundService
 import com.tencent.mm.ui.LauncherUI
 import com.tencent.mm.ui.chatting.ChattingUI
 import com.tencent.wcdb.database.SQLiteDatabase
 import dev.ujhhgtg.comptime.This
+import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.reflekt.utils.isSubclassOf
+import dev.ujhhgtg.reflekt.utils.makeAccessible
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.hooks.api.core.WeConversationApi
@@ -44,8 +46,6 @@ import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
 import dev.ujhhgtg.wekit.utils.reflection.BString
-import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.reflekt.utils.makeAccessible
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Field
 import kotlin.math.sqrt
@@ -405,7 +405,7 @@ object HideContacts : ClickableHookItem(), IResolveDex {
         }
     }
 
-    private val methodMainAdapterPreformSearch by dexMethod()
+//    private val methodMainAdapterPerformSearch by dexMethod()
     private val methodAddressMvvmListPreprocessList by dexMethod()
     private val methodChatroomContactAdapterInitCursor by dexMethod()
     private val methodVoipLaunchNotify by dexMethod()
@@ -428,12 +428,12 @@ object HideContacts : ClickableHookItem(), IResolveDex {
 //    private val classContactRecommendHelperV3 by dexClass()
 
     override fun resolveDex(dexKit: DexKitBridge) {
-        methodMainAdapterPreformSearch.find(dexKit) {
-            searchPackages("com.tencent.mm.plugin.fts.ui")
-            matcher {
-                usingEqStrings("MicroMsg.FTS.FTSMainAdapter", "tryReSortUIUnit, relevantSearchUIUnitIdx: (%d)<->chatRoomUIUnitIdx: (%d)")
-            }
-        }
+//        methodMainAdapterPerformSearch.find(dexKit) {
+//            searchPackages("com.tencent.mm.plugin.fts.ui")
+//            matcher {
+//                usingEqStrings("MicroMsg.FTS.FTSMainAdapter", "tryReSortUIUnit, relevantSearchUIUnitIdx: (%d)<->chatRoomUIUnitIdx: (%d)")
+//            }
+//        }
 
         methodAddressMvvmListPreprocessList.find(dexKit) {
             matcher {
