@@ -68,7 +68,7 @@ object ForwardFavoriteVoices : SwitchFeature() {
                         TextButton({
                             copyToClipboard(ctx, voiceFilePath)
                             showToast(ctx, "已复制")
-                        }) { Text("复制") }
+                        }) { Text("复制路径") }
                         Button({
                             WeMessageApi.sendVoice(WeCurrentConversationApi.value, voiceFilePath, AudioUtils.getDurationMs(voiceFilePath).coerceToInt())
                             showToast(ctx, "已发送")

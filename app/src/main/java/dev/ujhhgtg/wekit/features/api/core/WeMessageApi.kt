@@ -8,10 +8,10 @@ import com.tencent.mm.storage.emotion.EmojiInfo
 import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.spec.VagueType
+import dev.ujhhgtg.reflekt.spec.typeMatches
 import dev.ujhhgtg.reflekt.utils.Modifiers
 import dev.ujhhgtg.reflekt.utils.createInstance
 import dev.ujhhgtg.reflekt.utils.isBuiltin
-import dev.ujhhgtg.reflekt.utils.isStatic
 import dev.ujhhgtg.reflekt.utils.makeAccessible
 import dev.ujhhgtg.wekit.constants.WeChatVersions
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
@@ -273,9 +273,9 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             }
         }
     }
-    private val classVoiceNameGen by dexClass {
+    private val classVoiceNameGen by dexClass(allowFailure = true) {
         matcher {
-            usingStrings("CREATE TABLE IF NOT EXISTS voiceinfo ( FileName TEXT PRIMARY KEY")
+            usingEqStrings("MicroMsg.VoiceLogic", "startRecord insert voicestg success")
         }
     }
     private val classVfs by dexClass {
@@ -335,6 +335,15 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         }
     }
 
+    // SceneVoiceService.run() — 在服务自身的 looper 线程上派发，避免在 IO 线程直接调用
+    // startRecvAndSend 时构造 Handler 抛出 "looper and serial is null!"
+    private val methodRunVoiceService by dexMethod(allowFailure = true) {
+        matcher {
+            paramCount = 0
+            usingEqStrings("MicroMsg.SceneVoiceService", "run() %s")
+        }
+    }
+
     private val classVoiceServiceInterface by dexClass()
 
     private val classVoiceServiceImpl by dexClass {
@@ -345,13 +354,13 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             )
         }
     }
-    private val methodSendVoice by dexMethod(allowMultiple = true) {
-        matcher {
-            declaredClass(classVoiceServiceImpl.clazz)
-            paramCount = 1
-            returnType = "void"
-        }
-    }
+//    private val methodSendVoice by dexMethod(allowMultiple = true) {
+//        matcher {
+//            declaredClass(classVoiceServiceImpl.clazz)
+//            paramCount = 1
+//            returnType = "void"
+//        }
+//    }
 
     // -------------------------------------------------------------------------------------
     // 运行时缓存
@@ -372,6 +381,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
     private lateinit var vfsReadMethod: Method         // VFS.F (read)
     private lateinit var vfsExistsMethod: Method       // VFS.k/e (exists)
     private lateinit var voiceNameGenMethod: Method    // g1.E
+    private lateinit var setVoiceMethod: Method        // 设置语音信息
     private var storageAccPathMethod: Method? = null  // b0.e (动态解析)
     private lateinit var pathGenMethod: Method         // h1.c
     private lateinit var voiceTaskConstructor: Constructor<*>
@@ -670,6 +680,14 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             returnType = String::class
         }.self
 
+        setVoiceMethod = classVoiceNameGen.reflekt().firstMethod {
+            parameterCount { it == 3 || it == 4 }
+            parameters {
+                it[0] == BString && it[1].typeMatches(int) && it[2].typeMatches(int)
+            }
+            returnType = bool
+        }.self
+
         classVoiceParams.reflekt().apply {
             val intFields = fields { type = Int::class }
             voiceDurationField = intFields[0].self
@@ -865,7 +883,15 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         }
     }
 
-    /** 发送私有路径下的语音文件 */
+    fun getVoiceFullPath(encPath: String): String {
+        val m = methodGetAmrFullPath.method
+        var service: Any? = null
+        if (!Modifier.isStatic(m.modifiers)) {
+            service = WeServiceApi.getServiceByClass(m.declaringClass)
+        }
+        return methodGetAmrFullPath.method.invoke(service, null, encPath, true) as String
+    }
+
     fun sendVoice(toUser: String, path: String, durationMs: Int): Boolean {
         var succeeded = runCatching {
             val partialPath = classVoiceLogic.reflekt()
@@ -874,16 +900,11 @@ object WeMessageApi : ApiFeature(), IResolveDex {
                     returnType = BString
                 }
                 .invokeStatic(toUser, "amr_") as String
-            val mGetAmrFullPath = methodGetAmrFullPath.method
-            val fullPath = if (mGetAmrFullPath.isStatic) {
-                mGetAmrFullPath.invoke(null, partialPath, true)
-            } else {
-                mGetAmrFullPath.invoke(WeServiceApi.getServiceByClass(mGetAmrFullPath.declaringClass), null, partialPath, true)
-            } as String
+            val fullPath = getVoiceFullPath(partialPath)
 
             Files.copy(Path(path), Path(fullPath), StandardCopyOption.REPLACE_EXISTING)
 
-            val finalDuration = if (durationMs > 60000) 60000 else durationMs
+            val actualDuration = if (durationMs > 60000) 60000 else durationMs
 
             val target = classVoiceLogic.clazz.reflekt()
                 .firstMethod {
@@ -893,9 +914,9 @@ object WeMessageApi : ApiFeature(), IResolveDex {
                     returnType = BBool
                 }.self
             if (target.parameterCount == 4) {
-                target.invoke(null, partialPath, finalDuration, 0, null)
+                target.invoke(null, partialPath, actualDuration, 0, null)
             } else {
-                target.invoke(null, partialPath, finalDuration, 0)
+                target.invoke(null, partialPath, actualDuration, 0)
             }
 
             val service = classSceneVoiceService.clazz.reflekt()
@@ -904,7 +925,18 @@ object WeMessageApi : ApiFeature(), IResolveDex {
                     modifiers(Modifiers.STATIC)
                 }.invokeStatic()!!
 
-            methodStartRecvAndSend.method.invoke(null, service)
+            val runMethod = runCatching {
+                if (methodRunVoiceService.isPlaceholder) return@runCatching null
+                methodRunVoiceService.method.makeAccessible()
+            }.onFailure {
+                WeLogger.w(TAG, "failed to load SceneVoiceService.run, fallback to startRecvAndSend", it)
+            }.getOrNull()
+
+            if (runMethod != null) {
+                runMethod.invoke(service)
+            } else {
+                methodStartRecvAndSend.method.invoke(getReceiverForMethod(methodStartRecvAndSend.method), service)
+            }
 
             WeLogger.i(TAG, "sent voice (WAuxv method): $fullPath")
         }.onFailure { WeLogger.e(TAG, "failed to send voice (WAuxv method)", it) }.isSuccess
@@ -912,54 +944,124 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         if (succeeded) return true
 
         succeeded = runCatching {
-            // 尝试通过 ServiceManager 获取
-            var finalServiceObj: Any? = null
-            if (getServiceMethod != null) {
-                try {
-                    finalServiceObj = getServiceMethod!!.invoke(null, classVoiceServiceInterface.clazz)
-                } catch (e: Exception) {
-                    WeLogger.e(TAG, "failed to retrieve ServiceManager, trying singleton fallback", e)
-                }
-            }
-
-            // 尝试单例 Fallback
-            if (finalServiceObj == null) {
-                val implClass = classVoiceServiceImpl.clazz
-                val instanceField = implClass.declaredFields.find {
-                    it.name == "INSTANCE" || it.type == implClass
-                }
-                if (instanceField != null) {
-                    instanceField.makeAccessible()
-                    finalServiceObj = instanceField.get(null)
-                }
-            }
-
-            if (finalServiceObj == null) error("failed to retrieve VoiceService instance")
+//            // 尝试通过 ServiceManager 获取
+//            var finalServiceObj: Any? = null
+//            if (getServiceMethod != null) {
+//                try {
+//                    finalServiceObj = getServiceMethod!!.invoke(null, classVoiceServiceInterface.clazz)
+//                } catch (e: Exception) {
+//                    WeLogger.e(TAG, "failed to retrieve ServiceManager, trying singleton fallback", e)
+//                }
+//            }
+//
+//            // 尝试单例 Fallback
+//            if (finalServiceObj == null) {
+//                val implClass = classVoiceServiceImpl.clazz
+//                val instanceField = implClass.declaredFields.find {
+//                    it.name == "INSTANCE" || it.type == implClass
+//                }
+//                if (instanceField != null) {
+//                    instanceField.makeAccessible()
+//                    finalServiceObj = instanceField.get(null)
+//                }
+//            }
+//
+//            if (finalServiceObj == null) error("failed to retrieve VoiceService instance")
+//
+//            // 准备文件
+//            val fileName = voiceNameGenMethod.invoke(null, selfCustomWxId, "amr_") as? String
+//                ?: error("VoiceName Gen Failed")
+//            val accPath = getAccPath()
+//            val voice2Root = if (accPath.endsWith("/")) "${accPath}voice2/" else "$accPath/voice2/"
+//            val destFullPath =
+//                pathGenMethod.invoke(null, voice2Root, "msg_", fileName, ".amr", 2) as? String
+//                    ?: error("Path Gen Failed")
+//
+//            if (!copyFileViaVfs(path, destFullPath)) return false
+//
+//            // 构造任务
+//            val paramsObj = classVoiceParams.clazz.createInstance(toUser, fileName)
+//            voiceDurationField.set(paramsObj, durationMs)
+//            voiceOffsetField.set(paramsObj, 0)
+//
+//            val taskObj = voiceTaskConstructor.newInstance(paramsObj)
+//                ?: error("failed to construct voice task")
+//
+//            methodSendVoice.method.invoke(finalServiceObj, taskObj)
+//            WeLogger.i(TAG, "sent voice (Service method): $fileName")
 
             // 准备文件
-            val fileName = voiceNameGenMethod.invoke(null, selfCustomWxId, "amr_") as? String
-                ?: error("VoiceName Gen Failed")
+            val fileName = voiceNameGenMethod.invoke(getReceiverForMethod(voiceNameGenMethod), toUser, "amr_") as? String
+                ?: error("failed to generate voice name")
             val accPath = getAccPath()
             val voice2Root = if (accPath.endsWith("/")) "${accPath}voice2/" else "$accPath/voice2/"
             val destFullPath =
                 pathGenMethod.invoke(null, voice2Root, "msg_", fileName, ".amr", 2) as? String
-                    ?: error("Path Gen Failed")
+                    ?: error("failed to generate path")
 
             if (!copyFileViaVfs(path, destFullPath)) return false
 
-            // 构造任务
-            val paramsObj = classVoiceParams.clazz.createInstance(toUser, fileName)
-            voiceDurationField.set(paramsObj, durationMs)
-            voiceOffsetField.set(paramsObj, 0)
+            // 设置语音信息
+            val finalDurationMs = durationMs.coerceIn(1, 60_000)
+            val setVoiceReceiver = getReceiverForMethod(setVoiceMethod)
+            val setVoiceResult = if (setVoiceMethod.parameterCount == 4) {
+                setVoiceMethod.invoke(setVoiceReceiver, fileName, finalDurationMs, 0, null)
+            } else {
+                setVoiceMethod.invoke(setVoiceReceiver, fileName, finalDurationMs, 0)
+            } as? Boolean ?: false
 
-            val taskObj = voiceTaskConstructor.newInstance(paramsObj)
-                ?: error("failed to construct voice task")
+            if (!setVoiceResult) {
+                WeLogger.w(TAG, "VoiceLogic.setVoice returned false, still starting voice service: fileName=$fileName, target=$toUser")
+            }
 
-            methodSendVoice.method.invoke(finalServiceObj, taskObj)
-            WeLogger.i(TAG, "sent voice (Service method): $fileName")
+            // 启动语音服务发送（消息记录由微信自身发送流程创建，切勿手动插入，否则会生成一条对方的假语音且发送状态卡死转圈）
+            startVoiceService()
         }.onFailure { WeLogger.e(TAG, "failed to send voice (Service method)", it) }.isSuccess
 
         return succeeded
+    }
+
+    private fun getReceiverForMethod(method: Method): Any? {
+        return if (Modifier.isStatic(method.modifiers)) {
+            null
+        } else {
+            WeServiceApi.getServiceByClass(method.declaringClass)
+        }
+    }
+
+    private fun startVoiceService() {
+        runCatching {
+            // 获取 SceneVoiceService 实例
+            val serviceType = methodStartRecvAndSend.method.declaringClass
+
+            val getServiceMethod = classSceneVoiceService.reflekt().firstMethod {
+                modifiers(Modifiers.STATIC)
+                parameters()
+                returnType = serviceType
+            }.self
+
+            val service = getServiceMethod.invoke(getReceiverForMethod(getServiceMethod))
+                ?: error("SceneVoiceService.getVoiceService returned null")
+
+            // 优先调用 run()：它会在服务自身的 looper 线程上派发发送任务。
+            // 直接在 IO 线程调用 startRecvAndSend 会因构造 Handler 时无 Looper
+            // 抛出 "looper and serial is null!"，导致发送卡死转圈，必须重启微信。
+            val runMethod = runCatching {
+                if (methodRunVoiceService.isPlaceholder) return@runCatching null
+                methodRunVoiceService.method.makeAccessible()
+            }.onFailure {
+                WeLogger.w(TAG, "failed to load SceneVoiceService.run, fallback to startRecvAndSend", it)
+            }.getOrNull()
+
+            if (runMethod != null) {
+                runMethod.invoke(service)
+            } else {
+                methodStartRecvAndSend.method.invoke(getReceiverForMethod(methodStartRecvAndSend.method), service)
+            }
+            WeLogger.d(TAG, "voice service started successfully")
+        }.onFailure {
+            WeLogger.e(TAG, "failed to start voice service", it)
+        }
     }
 
     fun sendXmlAppMsg(toUser: String, xmlContent: String): Boolean {
