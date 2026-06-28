@@ -4,6 +4,12 @@ import android.annotation.SuppressLint
 import android.content.ContentValues
 import com.tencent.mm.opensdk.modelmsg.WXFileObject
 import com.tencent.mm.opensdk.modelmsg.WXMediaMessage
+import com.tencent.mm.opensdk.modelmsg.WXMiniProgramObject
+import com.tencent.mm.opensdk.modelmsg.WXMusicObject
+import com.tencent.mm.opensdk.modelmsg.WXMusicVideoObject
+import com.tencent.mm.opensdk.modelmsg.WXTextObject
+import com.tencent.mm.opensdk.modelmsg.WXVideoObject
+import com.tencent.mm.opensdk.modelmsg.WXWebpageObject
 import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.spec.VagueType
@@ -524,7 +530,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             refermsg.put("svrid", msgSvrId)
             refermsg.put("fromusr", mi.talker)
             refermsg.put("chatusr", mi.talker)
-            refermsg.put("displayname", WeDatabaseApi.getDisplayName(mi.talker ?: ""))
+            refermsg.put("displayname", WeDatabaseApi.getDisplayName(mi.talker))
             refermsg.put("msgsource", "")
             refermsg.put("content", content)
             refermsg.put("strid", "")
@@ -1143,14 +1149,13 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXWebpageObject").newInstance().apply {
-                reflekt().setField("webpageUrl", webpageUrl)
-            }
+            val mediaObject = WXWebpageObject()
+            mediaObject.webpageUrl = webpageUrl
             val mediaMessage = WXMediaMessage().apply {
                 this.title = title
                 this.description = description
                 this.thumbData = thumbData
-                reflekt().setField("mediaObject", mediaObject)
+                this.mediaObject = mediaObject
             }
             methodShareFile.method.invoke(
                 null,
@@ -1177,14 +1182,13 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXVideoObject").newInstance().apply {
-                reflekt().setField("videoUrl", videoUrl)
-            }
+            val mediaObject = WXVideoObject()
+            mediaObject.videoUrl = videoUrl
             val mediaMessage = WXMediaMessage().apply {
                 this.title = title
                 this.description = description
                 this.thumbData = thumbData
-                reflekt().setField("mediaObject", mediaObject)
+                this.mediaObject = mediaObject
             }
             methodShareFile.method.invoke(
                 null,
@@ -1208,12 +1212,10 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXTextObject").newInstance().apply {
-                reflekt().setField("text", text)
-            }
-            val mediaMessage = WXMediaMessage().apply {
-                reflekt().setField("mediaObject", mediaObject)
-            }
+            val mediaObject = WXTextObject()
+            mediaObject.text = text
+            val mediaMessage = WXMediaMessage()
+            mediaMessage.mediaObject = mediaObject
             methodShareFile.method.invoke(
                 null,
                 mediaMessage,
@@ -1240,15 +1242,15 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXMusicObject").newInstance().apply {
-                reflekt().setField("musicUrl", musicUrl)
-                reflekt().setField("musicDataUrl", musicDataUrl)
+            val mediaObject = WXMusicObject().apply {
+                this.musicUrl = musicUrl
+                this.musicDataUrl = musicDataUrl
             }
             val mediaMessage = WXMediaMessage().apply {
                 this.title = title
                 this.description = description
                 this.thumbData = thumbData
-                reflekt().setField("mediaObject", mediaObject)
+                this.mediaObject = mediaObject
             }
             methodShareFile.method.invoke(
                 null,
@@ -1279,18 +1281,18 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXMusicVideoObject").newInstance().apply {
-                reflekt().setField("musicUrl", musicUrl)
-                reflekt().setField("musicDataUrl", musicDataUrl)
-                reflekt().setField("singerName", singerName)
-                reflekt().setField("duration", duration)
-                reflekt().setField("songLyric", songLyric)
+            val mediaObject = WXMusicVideoObject().apply {
+                this.musicUrl = musicUrl
+                this.musicDataUrl = musicDataUrl
+                this.singerName = singerName
+                this.duration = duration
+                this.songLyric = songLyric
             }
             val mediaMessage = WXMediaMessage().apply {
                 this.title = title
                 this.description = description
                 this.thumbData = thumbData
-                reflekt().setField("mediaObject", mediaObject)
+                this.mediaObject = mediaObject
             }
             methodShareFile.method.invoke(
                 null,
@@ -1318,16 +1320,16 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         appId: String? = null
     ): Boolean {
         return try {
-            val mediaObject = dev.ujhhgtg.wekit.utils.reflection.ClassLoaders.HOST.loadClass("com.tencent.mm.opensdk.modelmsg.WXMiniProgramObject").newInstance().apply {
-                reflekt().setField("webpageUrl", "https://github.com")
-                reflekt().setField("userName", userName)
-                reflekt().setField("path", path)
+            val mediaObject = WXMiniProgramObject().apply {
+                webpageUrl = "https://github.com"
+                this.userName = userName
+                this.path = path
             }
             val mediaMessage = WXMediaMessage().apply {
                 this.title = title
                 this.description = description
                 this.thumbData = thumbData
-                reflekt().setField("mediaObject", mediaObject)
+                this.mediaObject = mediaObject
             }
             methodShareFile.method.invoke(
                 null,

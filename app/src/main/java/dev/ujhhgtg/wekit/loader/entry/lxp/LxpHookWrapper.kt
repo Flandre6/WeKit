@@ -1,18 +1,16 @@
-package dev.ujhhgtg.wekit.loader.entry.lsp101
+package dev.ujhhgtg.wekit.loader.entry.lxp
 
 import dev.ujhhgtg.wekit.loader.abc.IHookBridge
 import dev.ujhhgtg.wekit.loader.abc.IHookBridge.IMemberHookCallback
 import dev.ujhhgtg.wekit.loader.abc.IHookBridge.MemberUnhookHandle
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
-import io.github.libxposed.api.annotations.XposedApiMin
 import java.lang.reflect.Executable
 import java.lang.reflect.Member
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-@XposedApiMin(101)
-object Lsp101HookWrapper {
+object LxpHookWrapper {
 
     var self: XposedModule? = null
 
@@ -27,7 +25,7 @@ object Lsp101HookWrapper {
 
     fun interface Hooker : XposedInterface.Hooker {
         @Throws(Throwable::class)
-        fun intercept(chain: XposedInterface.Chain): Any?
+        override fun intercept(chain: XposedInterface.Chain): Any?
     }
 
     class CallbackWrapper(
@@ -216,7 +214,7 @@ object Lsp101HookWrapper {
                 try {
                     callbacks[i].callback.beforeHookedMember(param)
                 } catch (t: Throwable) {
-                    Lsp101HookImpl.log(t)
+                    LxpHookImpl.log(t)
                 }
             }
             param.index = -1
@@ -241,7 +239,7 @@ object Lsp101HookWrapper {
                 try {
                     callbacks[i].callback.afterHookedMember(param)
                 } catch (t: Throwable) {
-                    Lsp101HookImpl.log(t)
+                    LxpHookImpl.log(t)
                 }
             }
 

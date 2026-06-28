@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.loader.entry.lsp101
+package dev.ujhhgtg.wekit.loader.entry.lxp
 
 import android.util.Log
 import dev.ujhhgtg.comptime.This
@@ -11,14 +11,12 @@ import dev.ujhhgtg.wekit.loader.abc.ILoaderService
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedInterface.CtorInvoker
 import io.github.libxposed.api.XposedModule
-import io.github.libxposed.api.annotations.XposedApiMin
 import java.lang.reflect.Constructor
 import java.lang.reflect.Executable
 import java.lang.reflect.Member
 import java.lang.reflect.Method
 
-@XposedApiMin(101)
-object Lsp101HookImpl : IHookBridge, ILoaderService {
+object LxpHookImpl : IHookBridge, ILoaderService {
 
     lateinit var self: XposedModule
     private val TAG = This.Class.simpleName
@@ -29,8 +27,8 @@ object Lsp101HookImpl : IHookBridge, ILoaderService {
     override val frameworkName: String get() = self.frameworkName
     override val frameworkVersion: String get() = self.frameworkVersion
     override val frameworkVersionCode: Long get() = self.frameworkVersionCode
-    override val hookCounter: Long get() = Lsp101HookWrapper.hookCounter.toLong()
-    override val hookedMethods: Set<Member?> get() = Lsp101HookWrapper.hookedMethodsRaw
+    override val hookCounter: Long get() = LxpHookWrapper.hookCounter.toLong()
+    override val hookedMethods: Set<Member?> get() = LxpHookWrapper.hookedMethodsRaw
     override val entryPointName: String = This.Class.name
     override val loaderVersionCode: Int = BuildConfig.VERSION_CODE
     override val loaderVersionName: String = BuildConfig.VERSION_NAME
@@ -41,7 +39,7 @@ object Lsp101HookImpl : IHookBridge, ILoaderService {
         callback: IMemberHookCallback,
         priority: Int
     ): MemberUnhookHandle {
-        return Lsp101HookWrapper.hookAndRegisterMethodCallback(member, callback, priority)
+        return LxpHookWrapper.hookAndRegisterMethodCallback(member, callback, priority)
     }
 
     override val isDeoptimizationSupported: Boolean = true
@@ -83,11 +81,11 @@ object Lsp101HookImpl : IHookBridge, ILoaderService {
     }
 
     override fun queryExtension(key: String, vararg args: Any?): Any? {
-        return Lsp101ExtCmd.handleQueryExtension(key)
+        return LxpExtCmd.handleQueryExtension(key)
     }
 
     fun init(base: XposedModule) {
         self = base
-        Lsp101HookWrapper.self = base
+        LxpHookWrapper.self = base
     }
 }

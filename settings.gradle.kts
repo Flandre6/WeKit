@@ -97,7 +97,6 @@ include(":app",
     ":libs:common:annotation-scanner",
     ":libs:external:comptime-kt:plugin",
     ":libs:external:comptime-kt:api",
-    ":libs:common:libxposed-api",
     ":libs:common:stubs",
     ":libs:common:bsh",
     ":libs:common:reflekt"

@@ -8,7 +8,6 @@ import com.tencent.tinker.loader.app.TinkerApplication
 import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.wekit.loader.abc.IHookBridge
 import dev.ujhhgtg.wekit.loader.abc.ILoaderService
-import dev.ujhhgtg.wekit.loader.utils.LibXposedApiByteCodeGenerator
 import dev.ujhhgtg.wekit.loader.utils.NativeLoader
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -42,7 +41,6 @@ object StartupAgent {
         val ctx = getBaseApplication()
         HostInfo.init(ctx)
 //        SignatureVerifier.verify(ctx)
-        LibXposedApiByteCodeGenerator.init()
         NativeLoader.init(ctx)
         WeLauncher.init(ctx)
 

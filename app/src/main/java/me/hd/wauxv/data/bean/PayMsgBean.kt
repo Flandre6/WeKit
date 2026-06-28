@@ -1,6 +1,8 @@
 package me.hd.wauxv.data.bean
 
 import androidx.annotation.Keep
+import dev.ujhhgtg.reflekt.spec.typeMatches
+import dev.ujhhgtg.wekit.utils.reflection.int
 
 @Keep
 class PayMsgBean(g2: Any) {
@@ -23,7 +25,7 @@ class PayMsgBean(g2: Any) {
         username = if (stringFields.isNotEmpty()) stringFields[0].get(g2) as? String ?: "" else ""
         displayName = if (stringFields.size > 2) stringFields[2].get(g2) as? String ?: "" else ""
 
-        val intFields = fields.filter { it.type == Int::class.java || it.type == Int::class.javaPrimitiveType || it.type == java.lang.Integer::class.java }
+        val intFields = fields.filter { it.type.typeMatches(int) }
         timestamp = if (intFields.isNotEmpty()) intFields[0].get(g2) as? Int ?: 0 else 0
         status = if (intFields.size > 2) intFields[2].get(g2) as? Int ?: 0 else 0
 

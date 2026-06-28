@@ -178,6 +178,20 @@ androidComponents {
             embedAboutLibraries,
             EmbedAboutLibrariesTask::outputDir
         )
+
+        val embedEruda = tasks.register<EmbedErudaTask>("embedEruda$variantName") {
+            group = "wekit"
+            description = "Embed eruda.min.js as a String constant for $variantName"
+
+            url.set("https://cdn.jsdelivr.net/npm/eruda@3.4.3/eruda.min.js")
+            outputDir.set(layout.buildDirectory.dir("generated/source/eruda/${variant.name}"))
+            namespace.set(libs.versions.namespace.get())
+        }
+
+        kotlinSources.addGeneratedSourceDirectory(
+            embedEruda,
+            EmbedErudaTask::outputDir
+        )
     }
 }
 
@@ -271,7 +285,7 @@ dependencies {
     implementation(libs.composablehorizons.material.symbols.filled)
     implementation(libs.composablehorizons.material.symbols.outlined)
 
-    implementation(libs.google.guava)
+//    implementation(libs.google.guava)
     implementation(libs.google.protobuf.javalite)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.protobuf)
@@ -280,9 +294,8 @@ dependencies {
     implementation(project(":libs:common:bsh"))
 
     compileOnly(libs.legacyxposed.api)
-    compileOnly(project(":libs:common:libxposed-api"))
+    compileOnly(libs.libxposed.api)
     implementation(libs.libxposed.service)
-    implementation(libs.dexlib2)
     implementation(libs.dexkit)
     implementation(libs.hiddenapibypass)
     implementation(project(":libs:common:reflekt"))

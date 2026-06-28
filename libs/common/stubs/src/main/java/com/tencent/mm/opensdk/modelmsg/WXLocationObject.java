@@ -1,6 +1,6 @@
 package com.tencent.mm.opensdk.modelmsg;
 
-public class WXLocationObject {
+public class WXLocationObject implements WXMediaMessage.IMediaObject {
 
     public double lat;
     public double lng;

@@ -1,6 +1,5 @@
 package dev.ujhhgtg.wekit.features.api.core
 
-import dev.ujhhgtg.wekit.features.api.core.models.WeContact
 import dev.ujhhgtg.wekit.features.core.ApiFeature
 import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -12,7 +11,7 @@ import dev.ujhhgtg.wekit.utils.WeLogger
  * WAuxv original: uses w23.r (ContactLabelStorage) and z23/ NetScene classes via DexKit.
  * WeKit: queries WeChat's SQLite database directly via WeDatabaseApi — simpler, no DexKit needed.
  *
- * WeChat label table (from wechat_8069): contactlabel_ext (labelID, labelName, labelPYFull, labelPYShort,
+ * WeChat label table (from wechat_8069): ContactLabel (labelID, labelName, labelPYFull, labelPYShort,
  * createTime, isTemporary, lastUseTime). Contact-label bindings in rcontact field_contactLabels.
  */
 @Feature(name = "联系人标签服务", categories = ["API"], description = "提供联系人标签查询与修改能力")
@@ -29,7 +28,7 @@ object WeContactLabelApi : ApiFeature() {
     fun getAllLabels(): List<ContactLabel> {
         return try {
             val cursor = WeDatabaseApi.rawQuery(
-                "SELECT labelID, labelName FROM contactlabel_ext ORDER BY labelName"
+                "SELECT labelID, labelName FROM ContactLabel ORDER BY labelName"
             )
             val labels = mutableListOf<ContactLabel>()
             cursor.use {
@@ -90,11 +89,11 @@ object WeContactLabelApi : ApiFeature() {
             WeLogger.i(TAG, "modifyLabel: $labelName with ${memberWxIds.size} members")
             val existingId = getLabelIdByName(labelName)
             if (existingId != null) {
-                WeDatabaseApi.rawQuery("UPDATE contactlabel_ext SET labelName = ? WHERE labelID = ?", arrayOf(labelName, existingId.toString()))
+                WeDatabaseApi.rawQuery("UPDATE ContactLabel SET labelName = ? WHERE labelID = ?", arrayOf(labelName, existingId.toString()))
             } else {
                 val newId = (System.currentTimeMillis() / 1000).toInt()
                 val now = System.currentTimeMillis()
-                WeDatabaseApi.rawQuery("INSERT INTO contactlabel_ext (labelID, labelName, createTime, lastUseTime) VALUES (?, ?, ?, ?)", arrayOf(newId.toString(), labelName, now.toString(), now.toString()))
+                WeDatabaseApi.rawQuery("INSERT INTO ContactLabel (labelID, labelName, createTime, lastUseTime) VALUES (?, ?, ?, ?)", arrayOf(newId.toString(), labelName, now.toString(), now.toString()))
             }
         } catch (e: Exception) { WeLogger.e(TAG, "modifyLabel failed", e) }
     }
@@ -104,7 +103,7 @@ object WeContactLabelApi : ApiFeature() {
      */
     private fun getLabelIdByName(labelName: String): Int? {
         val cursor = WeDatabaseApi.rawQuery(
-            "SELECT labelID FROM contactlabel_ext WHERE labelName = ?",
+            "SELECT labelID FROM ContactLabel WHERE labelName = ?",
             arrayOf(labelName)
         )
         cursor.use {
