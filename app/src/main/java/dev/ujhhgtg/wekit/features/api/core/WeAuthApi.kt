@@ -12,7 +12,6 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.reflection.ClassLoaders
 import java.lang.reflect.Proxy
 import java.util.LinkedList
-import java.util.function.Consumer
 
 @Feature(name = "授权与登录服务", categories = ["API"], description = "提供微信网页/小程序的授权登录能力")
 object WeAuthApi : ApiFeature(), IResolveDex {
@@ -25,7 +24,7 @@ object WeAuthApi : ApiFeature(), IResolveDex {
         }
     }
 
-    fun jsLogin(appId: String, callback: Consumer<String?>) {
+    fun jsLogin(appId: String, onResult: (String?) -> Unit) {
         try {
             val netScene = classNetSceneJSLogin.clazz.createInstance(
                 appId,
@@ -69,10 +68,12 @@ object WeAuthApi : ApiFeature(), IResolveDex {
                         if (errType == 0 && errCode == 0 && scene != null) {
                             val reqResp = scene.reflekt().firstMethod {
                                 name = "getReqResp"
+                                superclass()
                             }.invoke()
                             if (reqResp != null) {
                                 val respObj = reqResp.reflekt().firstMethod {
                                     name = "getRespObj"
+                                    superclass()
                                 }.invoke()
                                 if (respObj != null) {
                                     val proto = respObj.reflekt().getField("a")
@@ -85,17 +86,17 @@ object WeAuthApi : ApiFeature(), IResolveDex {
                                         } else null
 
                                         WeLogger.i(TAG, "jsLogin success, code: $code")
-                                        callback.accept(code)
+                                        onResult(code)
                                     }
                                 }
                             }
                         } else {
                             WeLogger.w(TAG, "jsLogin failed: errType=$errType, errCode=$errCode, errMsg=$errMsg")
-                            callback.accept(null)
+                            onResult(null)
                         }
                     } catch (t: Throwable) {
                         WeLogger.e(TAG, "error parsing onSceneEnd", t)
-                        callback.accept(null)
+                        onResult(null)
                     }
                 }
                 null
@@ -104,7 +105,7 @@ object WeAuthApi : ApiFeature(), IResolveDex {
             doSceneMethod.invoke(netScene, dispatcher, callbackProxy)
         } catch (e: Exception) {
             WeLogger.e(TAG, "jsLogin execution failed", e)
-            callback.accept(null)
+            onResult(null)
         }
     }
 }

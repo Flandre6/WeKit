@@ -1542,9 +1542,10 @@ object JavaEngine {
             })
 
             // === JSLogin ===
-            setMethod(BshMethod("jsLogin", arrayOf(BString, Consumer::class.java)) {
+            setMethod(BshMethod("jsLogin", arrayOf(BString, Consumer::class.java)) { args ->
                 @Suppress("UNCHECKED_CAST")
-                WeAuthApi.jsLogin(it[0] as String, it[1] as Consumer<String?>)
+                val callback = args[1] as Consumer<String?>
+                WeAuthApi.jsLogin(args[0] as String) { callback.accept(it) }
                 return@BshMethod null
             })
 
