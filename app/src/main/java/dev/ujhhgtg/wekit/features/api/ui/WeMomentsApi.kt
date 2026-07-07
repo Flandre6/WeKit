@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Bundle
-import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.reflekt.Reflect
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.Modifiers
@@ -41,8 +40,8 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.util.concurrent.atomic.AtomicReference
 import java.util.LinkedList
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.div
 
