@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Bundle
+import android.os.Parcelable
 import android.os.SystemClock
 import dev.ujhhgtg.reflekt.Reflect
 import dev.ujhhgtg.reflekt.reflekt
@@ -41,6 +42,7 @@ import kotlinx.serialization.protobuf.ProtoBuf
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.LinkedList
@@ -405,6 +407,16 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
         }
     }
 
+    private val methodExportImageToAlbum by dexMethod {
+        matcher {
+            modifiers = Modifier.STATIC
+            paramCount(3)
+            paramTypes(Context::class.java, String::class.java, String::class.java)
+            returnType(String::class.java)
+            usingEqStrings("[+] Called exportImage, src: %s", "exportImageImpl")
+        }
+    }
+
     private val classGalleryEntryUi by dexClass {
         matcher {
             usingEqStrings("MicroMsg.GalleryEntryUI", "query souce: ", "doRedirect %s")
@@ -495,6 +507,61 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
     }
 
     private val pendingAlbumRepostText = AtomicReference<String?>(null)
+
+    private data class GalleryEditorMedia(
+        val coverPaths: ArrayList<String>,
+        val mediaItems: ArrayList<Parcelable>
+    )
+
+    private data class VideoMetadata(
+        val durationMs: Int,
+        val width: Int,
+        val height: Int,
+        val size: Int
+    )
+
+    private val galleryImageMediaItemClass: Class<*> by lazy {
+        classGalleryEntryUi.clazz.classLoader!!.loadClass("com.tencent.mm.plugin.gallery.model.GalleryItem\$ImageMediaItem")
+    }
+
+    private val galleryLivePhotoMediaItemClass: Class<*> by lazy {
+        classGalleryEntryUi.clazz.classLoader!!.loadClass("com.tencent.mm.plugin.gallery.model.GalleryItem\$LivePhotoMediaItem")
+    }
+
+    private val galleryImageMediaItemCtor by lazy {
+        galleryImageMediaItemClass.getDeclaredConstructor(
+            Long::class.javaPrimitiveType,
+            String::class.java,
+            String::class.java,
+            String::class.java
+        ).apply { isAccessible = true }
+    }
+
+    private val galleryLivePhotoMediaItemCtor by lazy {
+        galleryLivePhotoMediaItemClass.getDeclaredConstructor(
+            Long::class.javaPrimitiveType,
+            String::class.java,
+            String::class.java,
+            String::class.java
+        ).apply { isAccessible = true }
+    }
+
+    private val livePhotoIntFields: List<Field> by lazy {
+        galleryLivePhotoMediaItemClass.declaredFields
+            .filter { !Modifier.isStatic(it.modifiers) && it.type == Int::class.javaPrimitiveType }
+            .onEach { it.isAccessible = true }
+    }
+
+    private val livePhotoIntFieldsByName: Map<String, Field> by lazy {
+        livePhotoIntFields.associateBy { it.name }
+    }
+
+    private val livePhotoCoverTimestampField: Field by lazy {
+        (runCatching { galleryLivePhotoMediaItemClass.getDeclaredField("F") }.getOrNull()
+            ?: galleryLivePhotoMediaItemClass.declaredFields
+                .first { !Modifier.isStatic(it.modifiers) && it.type == Long::class.javaPrimitiveType })
+            .apply { isAccessible = true }
+    }
 
     private val albumRepostDescriptionInjector = WeStartActivityApi.IStartActivityListener { _, intent ->
         injectPendingAlbumRepostText(intent, requireSnsUploadTarget = true)
@@ -1144,13 +1211,190 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
         }
     }
 
+    fun saveImageToAlbumPath(context: Context, path: String): String? {
+        return runCatching {
+            methodExportImageToAlbum.method.invoke(null, context, path, null) as? String
+        }.getOrElse {
+            WeLogger.e(TAG, "failed to save Moments image to album: $path", it)
+            null
+        }
+    }
+
+    suspend fun openMomentLivePhotoEditorFromAlbumResult(
+        activity: Activity,
+        text: String,
+        content: MomentContent,
+        source: Any? = null
+    ): ActionResult {
+        return try {
+            if (!content.hasLivePhoto) {
+                return ActionResult(success = false, sent = false, message = "这条朋友圈不包含实况图片")
+            }
+
+            ensureImagePathsCached(content.mediaList, content.nativeMediaList)
+                ?: return ActionResult(success = false, sent = false, message = "图片下载失败或超时")
+
+            val resolved = resolveMediaItems(content)
+                ?: return ActionResult(success = false, sent = false, message = "未找到本地缓存的图片")
+            if (resolved.degradedLivePhotos) {
+                return ActionResult(success = false, sent = false, message = "实况视频未缓存，请先播放一次后再试")
+            }
+
+            val editorMedia = prepareGalleryEditorMedia(activity, resolved.items)
+                ?: return ActionResult(success = false, sent = false, message = "实况图片保存到相册失败")
+
+            if (openMomentMixedMediaEditorFromAlbumResult(activity, text, editorMedia, source)) {
+                ActionResult(success = true, sent = false, message = "已打开实况图片编辑界面")
+            } else {
+                ActionResult(success = false, sent = false, message = "实况图片自动选择失败")
+            }
+        } catch (e: Exception) {
+            WeLogger.e(TAG, "openMomentLivePhotoEditorFromAlbumResult failed", e)
+            ActionResult(success = false, sent = false, message = e.message ?: "打开实况图片编辑界面异常", error = e)
+        }
+    }
+
+    private fun prepareGalleryEditorMedia(context: Context, items: List<ResolvedMedia>): GalleryEditorMedia? {
+        if (items.isEmpty()) return null
+        val coverPaths = ArrayList<String>()
+        val mediaItems = ArrayList<Parcelable>()
+
+        for ((index, item) in items.withIndex()) {
+            val albumImagePath = saveImageToAlbumPath(context, item.imagePath)
+                ?: materializeImageToTemp(context, item.imagePath, index)
+                ?: return null
+            coverPaths.add(albumImagePath)
+
+            val mediaItem = if (item.videoPath != null) {
+                val albumVideoPath = saveVideoToAlbumPath(context, item.videoPath)
+                    ?: return null
+                createGalleryLivePhotoMediaItem(index, albumVideoPath, albumImagePath)
+            } else {
+                createGalleryImageMediaItem(index, albumImagePath)
+            } as? Parcelable ?: return null
+            mediaItems.add(mediaItem)
+        }
+
+        return GalleryEditorMedia(coverPaths, mediaItems)
+    }
+
+    private fun createGalleryImageMediaItem(index: Int, imagePath: String): Any {
+        val mediaId = System.currentTimeMillis() + index
+        return galleryImageMediaItemCtor.newInstance(mediaId, imagePath, imagePath, "image/jpeg")
+    }
+
+    private fun createGalleryLivePhotoMediaItem(index: Int, videoPath: String, coverPath: String): Any {
+        val mediaId = System.currentTimeMillis() + index
+        val item = galleryLivePhotoMediaItemCtor.newInstance(mediaId, videoPath, coverPath, "image/jpeg")
+        val metadata = probeVideoMetadata(videoPath)
+
+        // GalleryItem$LivePhotoMediaItem semantics are based on WeChat 8.0.74.
+        // Prefer obfuscated field names; fallback to the old declared-field order.
+        setLivePhotoIntField(item, "f155668z", 6, 0) // type = live photo
+        setLivePhotoIntField(item, "A", 1, 1) // state = parsed/ready
+        setLivePhotoIntField(item, "B", metadata.durationMs, 2)
+        setLivePhotoIntField(item, "C", metadata.width, 3)
+        setLivePhotoIntField(item, "D", metadata.height, 4)
+        setLivePhotoIntField(item, "E", metadata.size, 5)
+        setLivePhotoIntField(item, "G", 1, 6) // isParsedVideo
+        setLivePhotoIntField(item, "H", 1, 7) // isValid
+        setLivePhotoIntField(item, "I", 1, 8) // enabled
+        livePhotoCoverTimestampField.setLong(item, 0L)
+        WeLogger.i(
+            TAG,
+            "prepared gallery live photo item: cover=$coverPath(${regularFileSize(coverPath)}), " +
+                "video=$videoPath(${regularFileSize(videoPath)}), duration=${metadata.durationMs}, " +
+                "size=${metadata.width}x${metadata.height}/${metadata.size}"
+        )
+        return item
+    }
+
+    private fun setLivePhotoIntField(item: Any, name: String, value: Int, fallbackIndex: Int) {
+        val field = livePhotoIntFieldsByName[name] ?: livePhotoIntFields.getOrNull(fallbackIndex) ?: return
+        field.setInt(item, value)
+    }
+
+    private fun probeVideoMetadata(videoPath: String): VideoMetadata {
+        var durationMs = 0
+        var width = 0
+        var height = 0
+        runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(videoPath)
+                durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull() ?: 0
+                width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            } finally {
+                retriever.release()
+            }
+        }.onFailure {
+            WeLogger.e(TAG, "failed to probe live photo video metadata: $videoPath", it)
+        }
+        return VideoMetadata(durationMs, width, height, regularFileSize(videoPath).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
+    }
+
     fun openMomentVideoEditorFromAlbumResult(activity: Activity, text: String, videoPath: String, source: Any? = null): Boolean {
-        pendingAlbumRepostText.set(text)
         val resultIntent = android.content.Intent().apply {
             putStringArrayListExtra("key_select_video_list", arrayListOf(videoPath))
             putExtra("isTakePhoto", false)
             putExtra("key_extra_data", Bundle())
         }
+        return dispatchMomentAlbumResult(activity, text, resultIntent, source, "video: $videoPath")
+    }
+
+    private fun openMomentMixedMediaEditorFromAlbumResult(
+        activity: Activity,
+        text: String,
+        media: GalleryEditorMedia,
+        source: Any? = null
+    ): Boolean {
+        // In WeChat 8.0.74 SnsUIAction forwards key_select_multi_pic_item only when
+        // pc4.d.B() is enabled. User logs show SnsUploadUI received KMulti_Pic_Item_List=null,
+        // so live photos were downgraded to plain images. Keep using the official SnsUploadUI,
+        // but pass the final gallery extras directly to avoid losing the live-photo list.
+        return openMomentMixedMediaEditorDirect(activity, text, media)
+    }
+
+    private fun openMomentMixedMediaEditorDirect(
+        activity: Activity,
+        text: String,
+        media: GalleryEditorMedia
+    ): Boolean {
+        return runCatching {
+            val uploadIntent = android.content.Intent().apply {
+                setClassName(PackageNames.WECHAT, classSnsUploadUi.clazz.name)
+                putExtra("KSnsFrom", 14)
+                putExtra("KSnsPostManu", true)
+                putExtra("KTouchCameraTime", (System.currentTimeMillis() / 1000).toInt())
+                putExtra("KFilterId", 0)
+                putExtra("Kdescription", text)
+                putExtra("Kis_take_photo", false)
+                putStringArrayListExtra("sns_kemdia_path_list", media.coverPaths)
+                putStringArrayListExtra("sns_media_latlong_list", arrayListOf<String>())
+                putParcelableArrayListExtra("KMulti_Pic_Item_List", media.mediaItems)
+            }
+            activity.startActivityForResult(uploadIntent, 6)
+            WeLogger.i(
+                TAG,
+                "opened Moments mixed media editor directly: items=${media.mediaItems.size}, " +
+                    "covers=${media.coverPaths.size}, activity=${activity.javaClass.name}"
+            )
+            true
+        }.getOrElse {
+            WeLogger.e(TAG, "failed to open Moments mixed media editor directly", it)
+            false
+        }
+    }
+
+    private fun dispatchMomentAlbumResult(
+        activity: Activity,
+        text: String,
+        resultIntent: android.content.Intent,
+        source: Any?,
+        description: String
+    ): Boolean {
+        pendingAlbumRepostText.set(text)
         return runCatching {
             val existingSnsUiAction = findSnsUiAction(source) ?: findSnsUiAction(activity)
             val snsUiAction = existingSnsUiAction ?: createSnsUiAction(activity)
@@ -1158,18 +1402,19 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
                 methodSnsUiActionOnActivityResult.method.invoke(snsUiAction, 14, Activity.RESULT_OK, resultIntent)
                 WeLogger.i(
                     TAG,
-                    "dispatched Moments album video result through ${if (existingSnsUiAction != null) "existing" else "new"} SnsUIAction: " +
-                        "activity=${activity.javaClass.name}, source=${source?.javaClass?.name}, action=${snsUiAction.javaClass.name}"
+                    "dispatched Moments album result through ${if (existingSnsUiAction != null) "existing" else "new"} SnsUIAction: " +
+                        "description=$description, activity=${activity.javaClass.name}, source=${source?.javaClass?.name}, " +
+                        "action=${snsUiAction.javaClass.name}"
                 )
             } else {
                 val onActivityResult = findActivityResultMethod(activity)
                 onActivityResult.invoke(activity, 14, Activity.RESULT_OK, resultIntent)
-                WeLogger.i(TAG, "dispatched Moments album video result through Activity: activity=${activity.javaClass.name}")
+                WeLogger.i(TAG, "dispatched Moments album result through Activity: description=$description, activity=${activity.javaClass.name}")
             }
             true
         }.getOrElse {
             pendingAlbumRepostText.set(null)
-            WeLogger.e(TAG, "failed to dispatch Moments album video result: $videoPath", it)
+            WeLogger.e(TAG, "failed to dispatch Moments album result: $description", it)
             false
         }
     }

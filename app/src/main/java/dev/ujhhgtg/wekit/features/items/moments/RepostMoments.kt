@@ -77,7 +77,7 @@ object RepostMoments : SwitchFeature(), WeMomentsContextMenuApi.IMenuItemsProvid
         when (data.type) {
             1, 54 -> { // 图片 / 实况相册
                 if (data.hasLivePhoto) {
-                    // 编辑界面 (SnsUploadUI) 无法接收实况图片, 让用户在「降级为静态图编辑」与「一键转发保留实况」间选择
+                    // Live photos use editable repost, with static-image fallback in the dialog.
                     promptLivePhotoRepost(context, data)
                     return
                 }
@@ -121,8 +121,7 @@ object RepostMoments : SwitchFeature(), WeMomentsContextMenuApi.IMenuItemsProvid
     }
 
     /**
-     * 含实况图片的朋友圈无法通过编辑界面转发 (SnsUploadUI 不支持实况图片输入)。
-     * 弹窗让用户选择: 一键转发 (后台发送, 完整保留实况) 或 降级为静态图打开编辑界面。
+     * Live photo repost choices: edit live photo, or fall back to static image editing.
      */
     private fun promptLivePhotoRepost(
         context: WeMomentsContextMenuApi.MomentsContext,
@@ -132,12 +131,12 @@ object RepostMoments : SwitchFeature(), WeMomentsContextMenuApi.IMenuItemsProvid
         showComposeDialog(activity) {
             AlertDialogContent(
                 title = { Text("实况图片") },
-                text = { Text("此朋友圈包含实况图片, 无法通过编辑界面转发。\n可一键转发以完整保留实况, 或降级为静态图后打开编辑界面。") },
+                text = { Text("此朋友圈包含实况图片。\n可编辑实况转发，或降级为静态图后编辑。") },
                 confirmButton = {
                     Button(onClick = {
                         onDismiss()
-                        quickRepostMoment(context)
-                    }) { Text("保留实况一键转发") }
+                        editLivePhotoRepost(context, data)
+                    }) { Text("编辑实况转发") }
                 },
                 dismissButton = {
                     TextButton(onClick = {
@@ -154,6 +153,25 @@ object RepostMoments : SwitchFeature(), WeMomentsContextMenuApi.IMenuItemsProvid
                     }) { Text("降级为静态图编辑") }
                 }
             )
+        }
+    }
+
+    private fun editLivePhotoRepost(
+        context: WeMomentsContextMenuApi.MomentsContext,
+        data: WeMomentsApi.MomentContent
+    ) {
+        val activity = context.activity
+        showToast(activity, "正在准备实况图片...")
+        CoroutineScope(Dispatchers.Main).launch {
+            val result = WeMomentsApi.openMomentLivePhotoEditorFromAlbumResult(
+                activity = activity,
+                text = data.contentText,
+                content = data,
+                source = context.source
+            )
+            if (!result.success || result.message.isNotBlank()) {
+                showToastSuspend(activity, result.message)
+            }
         }
     }
 
