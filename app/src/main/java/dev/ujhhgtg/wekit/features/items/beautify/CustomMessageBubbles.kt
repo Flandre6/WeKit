@@ -15,22 +15,40 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.get
 import androidx.core.graphics.toColorInt
+import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.outlined.Delete
+import com.composables.icons.materialsymbols.outlined.Upload_file
 import com.tencent.mm.ui.base.AnimImageView
 import com.tencent.mm.ui.widget.MMNeat7extView
 import de.robv.android.xposed.XC_MethodHook
@@ -39,10 +57,12 @@ import dev.ujhhgtg.wekit.features.api.core.models.MessageType
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageViewApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.items.beautify.CustomMessageBubbles.ICON_TINT_TAG
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
 import dev.ujhhgtg.wekit.ui.content.DefaultColumn
+import dev.ujhhgtg.wekit.ui.content.IconButton
 import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.findViewWhich
 import dev.ujhhgtg.wekit.ui.utils.findViewsWhich
@@ -54,8 +74,10 @@ import dev.ujhhgtg.wekit.utils.fs.KnownPaths
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import androidx.compose.ui.graphics.Color as ComposeColor
 
 @Feature(name = "自定义消息气泡", categories = ["界面美化", "聊天"], description = "自定义聊天中的消息气泡图片和颜色")
 object CustomMessageBubbles : ClickableFeature(), WeChatMessageViewApi.ICreateViewListener {
@@ -68,6 +90,23 @@ object CustomMessageBubbles : ClickableFeature(), WeChatMessageViewApi.ICreateVi
     // The bubble images are source nine-patch PNGs (with black border markers), read in applyBubble.
     private const val LEFT_BUBBLE_FILE = "left_bubble.9.png"   // 对方
     private const val RIGHT_BUBBLE_FILE = "right_bubble.9.png" // 自己
+
+    private enum class BubbleSide(val title: String, val fileName: String) {
+        OTHER("对方消息", LEFT_BUBBLE_FILE),
+        SELF("自己消息", RIGHT_BUBBLE_FILE),
+    }
+
+    private data class BubbleForm(
+        val foregroundLight: String,
+        val foregroundDark: String,
+        val backgroundLight: String,
+        val backgroundDark: String,
+        val imageExists: Boolean,
+    ) {
+        val hasValidColors: Boolean
+            get() = listOf(foregroundLight, foregroundDark, backgroundLight, backgroundDark)
+                .all { it.isBlank() || runCatching { it.toColorInt() }.isSuccess }
+    }
 
     // View tag holding the icon tint color (Int) for an AnimImageView. WeChat swaps in the play
     // animation frames on click (after our bind hook runs), so we hook setCompoundDrawables* to
@@ -394,106 +433,266 @@ object CustomMessageBubbles : ClickableFeature(), WeChatMessageViewApi.ICreateVi
         }
     }
 
+    private fun deleteBubbleImage(context: Context, side: BubbleSide): Boolean {
+        val file = KnownPaths.moduleAssets / side.fileName
+        val ok = runCatching {
+            !file.exists() || file.deleteIfExists()
+        }.onFailure {
+            WeLogger.e(TAG, "failed to delete ${side.title} bubble image", it)
+        }.getOrDefault(false)
+
+        showToast(context, if (ok) "${side.title}气泡图片已删除" else "${side.title}气泡图片删除失败!")
+        return ok
+    }
+
+    @Composable
+    private fun ColorField(
+        label: String,
+        value: String,
+        onValueChange: (String) -> Unit,
+        modifier: Modifier = Modifier,
+    ) {
+        val parsedColor = remember(value) {
+            value.takeIf { it.isNotBlank() }?.let { runCatching { it.toColorInt() }.getOrNull() }
+        }
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            isError = value.isNotBlank() && parsedColor == null,
+            trailingIcon = parsedColor?.let { color ->
+                {
+                    Box(
+                        Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(ComposeColor(color))
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                    )
+                }
+            },
+            modifier = modifier,
+        )
+    }
+
+    @Composable
+    private fun BubbleEditor(
+        form: BubbleForm,
+        onFormChange: (BubbleForm) -> Unit,
+        onImport: () -> Unit,
+        onDelete: () -> Unit,
+    ) {
+        Text(
+            text = "文字颜色",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ColorField(
+                label = "亮色模式",
+                value = form.foregroundLight,
+                onValueChange = { onFormChange(form.copy(foregroundLight = it)) },
+                modifier = Modifier.weight(1f),
+            )
+            ColorField(
+                label = "暗色模式",
+                value = form.foregroundDark,
+                onValueChange = { onFormChange(form.copy(foregroundDark = it)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Text(
+            text = "背景颜色",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ColorField(
+                label = "亮色模式",
+                value = form.backgroundLight,
+                onValueChange = { onFormChange(form.copy(backgroundLight = it)) },
+                modifier = Modifier.weight(1f),
+            )
+            ColorField(
+                label = "暗色模式",
+                value = form.backgroundDark,
+                onValueChange = { onFormChange(form.copy(backgroundDark = it)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Text(
+            text = "气泡图片 (.9.png)",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (form.imageExists) "已导入" else "未导入",
+                color = if (form.imageExists) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = onImport) {
+                Icon(
+                    imageVector = MaterialSymbols.Outlined.Upload_file,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (form.imageExists) "更换" else "导入")
+            }
+            IconButton(
+                onClick = onDelete,
+                enabled = form.imageExists,
+            ) {
+                Icon(
+                    imageVector = MaterialSymbols.Outlined.Delete,
+                    contentDescription = "删除已导入的气泡图片",
+                    tint = if (form.imageExists) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    },
+                )
+            }
+        }
+    }
+
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
-            var al by remember { mutableStateOf(thatLight) }
-            var ad by remember { mutableStateOf(thatDark) }
-            var il by remember { mutableStateOf(thisLight) }
-            var id by remember { mutableStateOf(thisDark) }
+            var selectedSide by remember { mutableStateOf(BubbleSide.OTHER) }
+            var pendingDeletion by remember { mutableStateOf<BubbleSide?>(null) }
+            var otherForm by remember {
+                mutableStateOf(
+                    BubbleForm(
+                        foregroundLight = thatLight,
+                        foregroundDark = thatDark,
+                        backgroundLight = bgThatLight,
+                        backgroundDark = bgThatDark,
+                        imageExists = (KnownPaths.moduleAssets / LEFT_BUBBLE_FILE).exists(),
+                    )
+                )
+            }
+            var selfForm by remember {
+                mutableStateOf(
+                    BubbleForm(
+                        foregroundLight = thisLight,
+                        foregroundDark = thisDark,
+                        backgroundLight = bgThisLight,
+                        backgroundDark = bgThisDark,
+                        imageExists = (KnownPaths.moduleAssets / RIGHT_BUBBLE_FILE).exists(),
+                    )
+                )
+            }
 
-            var bgal by remember { mutableStateOf(bgThatLight) }
-            var bgad by remember { mutableStateOf(bgThatDark) }
-            var bgil by remember { mutableStateOf(bgThisLight) }
-            var bgid by remember { mutableStateOf(bgThisDark) }
+            fun updateForm(side: BubbleSide, transform: (BubbleForm) -> BubbleForm) {
+                when (side) {
+                    BubbleSide.OTHER -> otherForm = transform(otherForm)
+                    BubbleSide.SELF -> selfForm = transform(selfForm)
+                }
+            }
 
-            AlertDialogContent(
-                title = { Text("自定义消息气泡") },
-                text = {
-                    DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
-                        TextField(
-                            label = { Text("前景色 (对方 | 亮色模式)") },
-                            value = al,
-                            onValueChange = { al = it })
-                        TextField(
-                            label = { Text("前景色 (对方 | 暗色模式)") },
-                            value = ad,
-                            onValueChange = { ad = it })
-                        TextField(
-                            label = { Text("前景色 (自己 | 亮色模式)") },
-                            value = il,
-                            onValueChange = { il = it })
-                        TextField(
-                            label = { Text("前景色 (自己 | 暗色模式)") },
-                            value = id,
-                            onValueChange = { id = it })
-
-                        TextField(
-                            label = { Text("背景色 (对方 | 亮色模式)") },
-                            value = bgal,
-                            onValueChange = { bgal = it })
-                        TextField(
-                            label = { Text("背景色 (对方 | 暗色模式)") },
-                            value = bgad,
-                            onValueChange = { bgad = it })
-                        TextField(
-                            label = { Text("背景色 (自己 | 亮色模式)") },
-                            value = bgil,
-                            onValueChange = { bgil = it })
-                        TextField(
-                            label = { Text("背景色 (自己 | 暗色模式)") },
-                            value = bgid,
-                            onValueChange = { bgid = it })
-
-                        var leftExists by remember {
-                            mutableStateOf((KnownPaths.moduleAssets / LEFT_BUBBLE_FILE).exists())
+            val deleteSide = pendingDeletion
+            if (deleteSide != null) {
+                AlertDialogContent(
+                    title = { Text("删除气泡图片") },
+                    text = { Text("确定删除${deleteSide.title}已导入的气泡图片？") },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeletion = null }) { Text("取消") }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (deleteBubbleImage(context, deleteSide)) {
+                                    updateForm(deleteSide) { it.copy(imageExists = false) }
+                                    pendingDeletion = null
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError,
+                            ),
+                        ) {
+                            Text("删除")
                         }
-                        var rightExists by remember {
-                            mutableStateOf((KnownPaths.moduleAssets / RIGHT_BUBBLE_FILE).exists())
-                        }
+                    },
+                )
+            } else {
+                val selectedForm = when (selectedSide) {
+                    BubbleSide.OTHER -> otherForm
+                    BubbleSide.SELF -> selfForm
+                }
 
-                        Spacer(Modifier.height(8.dp))
-                        Text("气泡图片 (点九图 .9.png)")
+                AlertDialogContent(
+                    title = { Text("自定义消息气泡") },
+                    text = {
+                        DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                BubbleSide.entries.forEachIndexed { index, side ->
+                                    SegmentedButton(
+                                        selected = selectedSide == side,
+                                        onClick = { selectedSide = side },
+                                        shape = SegmentedButtonDefaults.itemShape(
+                                            index,
+                                            BubbleSide.entries.size,
+                                        ),
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Text(side.title)
+                                    }
+                                }
+                            }
 
-                        Row {
-                            Button(
-                                onClick = {
-                                    importBubbleImage(context, LEFT_BUBBLE_FILE, "左侧 (对方)") {
-                                        leftExists = true
+                            BubbleEditor(
+                                form = selectedForm,
+                                onFormChange = { next -> updateForm(selectedSide) { next } },
+                                onImport = {
+                                    val side = selectedSide
+                                    importBubbleImage(context, side.fileName, side.title) {
+                                        updateForm(side) { it.copy(imageExists = true) }
                                     }
                                 },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(if (leftExists) "重新导入对方" else "导入对方")
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Button(
-                                onClick = {
-                                    importBubbleImage(context, RIGHT_BUBBLE_FILE, "右侧 (自己)") {
-                                        rightExists = true
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(if (rightExists) "重新导入自己" else "导入自己")
-                            }
+                                onDelete = { pendingDeletion = selectedSide },
+                            )
                         }
-                    }
-                },
-                dismissButton = { TextButton(onDismiss) { Text("取消") } },
-                confirmButton = {
-                    Button(onClick = {
-                        thatLight = al
-                        thatDark = ad
-                        thisLight = il
-                        thisDark = id
+                    },
+                    dismissButton = { TextButton(onDismiss) { Text("取消") } },
+                    confirmButton = {
+                        Button(
+                            enabled = otherForm.hasValidColors && selfForm.hasValidColors,
+                            onClick = {
+                                thatLight = otherForm.foregroundLight
+                                thatDark = otherForm.foregroundDark
+                                thisLight = selfForm.foregroundLight
+                                thisDark = selfForm.foregroundDark
 
-                        bgThatLight = bgal
-                        bgThatDark = bgad
-                        bgThisLight = bgil
-                        bgThisDark = bgid
-                        onDismiss()
-                    }) { Text("确定") }
-                })
+                                bgThatLight = otherForm.backgroundLight
+                                bgThatDark = otherForm.backgroundDark
+                                bgThisLight = selfForm.backgroundLight
+                                bgThisDark = selfForm.backgroundDark
+                                onDismiss()
+                            },
+                        ) {
+                            Text("确定")
+                        }
+                    },
+                )
+            }
         }
     }
 }

@@ -3,7 +3,6 @@ package dev.ujhhgtg.wekit.features.items.chat
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
-import android.util.AttributeSet
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -12,47 +11,63 @@ import android.widget.GridView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.view.children
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Account_box
 import com.composables.icons.materialsymbols.outlined.Add
-import com.composables.icons.materialsymbols.outlined.Arrow_downward
-import com.composables.icons.materialsymbols.outlined.Arrow_upward
 import com.composables.icons.materialsymbols.outlined.Attach_file
 import com.composables.icons.materialsymbols.outlined.Attach_money
 import com.composables.icons.materialsymbols.outlined.Camera
 import com.composables.icons.materialsymbols.outlined.Chat
 import com.composables.icons.materialsymbols.outlined.Delete
+import com.composables.icons.materialsymbols.outlined.Drag_handle
+import com.composables.icons.materialsymbols.outlined.Edit
 import com.composables.icons.materialsymbols.outlined.Favorite
 import com.composables.icons.materialsymbols.outlined.Format_list_numbered
 import com.composables.icons.materialsymbols.outlined.Location_on
@@ -76,6 +91,7 @@ import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.preferences.WePrefs
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
+import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.InjectedUiTheme
 import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
@@ -85,14 +101,15 @@ import dev.ujhhgtg.wekit.ui.utils.iterable
 import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
+import dev.ujhhgtg.wekit.utils.android.constructor
 import dev.ujhhgtg.wekit.utils.now
-import dev.ujhhgtg.wekit.utils.reflection.BInt
-import dev.ujhhgtg.wekit.utils.reflection.int
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.lang.ref.WeakReference
+import java.util.UUID
 import kotlin.time.Duration.Companion.seconds
 
 @SuppressLint("StaticFieldLeak")
@@ -148,6 +165,11 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
         val indexInGrid: Int
     )
 
+    private data class QuickReplyDraft(
+        val id: String = UUID.randomUUID().toString(),
+        val text: String,
+    )
+
     private val toolsState = MutableStateFlow<List<Pair<String, MenuItem>>>(emptyList())
 
     private var itemsOrder by WePrefs.prefOption("chat_toolbar_order", NAME_TO_ICON_MAP.keys.joinToString(","))
@@ -176,12 +198,12 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
     private fun iconFor(name: String): ImageVector =
         if (name == QUICK_REPLY_NAME) MaterialSymbols.Outlined.Chat else NAME_TO_ICON_MAP.getValue(name)
 
-    // ensures 快捷回复 is present and ordered first while keeping the user's saved order for
-    // everything else; safe to call on legacy configs that predate the feature
+    // Ensures every supported item is present while preserving the user's saved order. Legacy
+    // configs that predate quick replies get that item inserted first.
     private fun normalizeOrder(order: List<String>): List<String> {
-        val result = order.toMutableList()
-        result.remove(QUICK_REPLY_NAME)
-        result.add(0, QUICK_REPLY_NAME)
+        val supportedItems = setOf(QUICK_REPLY_NAME) + NAME_TO_ICON_MAP.keys
+        val result = order.filter { it in supportedItems }.distinct().toMutableList()
+        if (QUICK_REPLY_NAME !in result) result.add(0, QUICK_REPLY_NAME)
         NAME_TO_ICON_MAP.keys.forEach { if (it !in result) result.add(it) }
         return result
     }
@@ -264,14 +286,7 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
             }
         }
 
-        // very fucking weird
-        ChatFooter::class.reflekt().run {
-            firstConstructorOrNull {
-                parameters(Context::class, AttributeSet::class, int)
-            } ?: firstConstructor {
-                parameters(Context::class, AttributeSet::class, BInt)
-            }
-        }.hookAfter {
+        ChatFooter::class.constructor.hookAfter {
             val chatFooter = thisObject as FrameLayout
             val activity = chatFooter.context as Activity
 
@@ -352,6 +367,7 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
         toolsState.value = emptyList()
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
             val currentOrder = remember {
@@ -360,53 +376,86 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
             val currentEnabled = remember { enabledItems.toMutableStateList() }
 
             AlertDialogContent(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(),
+                modifier = Modifier.fillMaxWidth(),
                 title = { Text("聊天工具栏") },
                 text = {
-                    LazyColumn {
-                        itemsIndexed(currentOrder) { index, name ->
-                            ListItem(
-                                modifier = Modifier,
-                                leadingContent = {
-                                    Icon(iconFor(name), contentDescription = null, modifier = Modifier.size(24.dp))
-                                },
-                                trailingContent = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (name == QUICK_REPLY_NAME) {
-                                            IconButton(onClick = { showQuickReplyConfig(context) }) {
-                                                Icon(MaterialSymbols.Outlined.Settings, contentDescription = "配置快捷回复")
-                                            }
-                                        }
-                                        IconButton(onClick = {
-                                            if (index > 0) {
-                                                val temp = currentOrder[index]
-                                                currentOrder[index] = currentOrder[index - 1]
-                                                currentOrder[index - 1] = temp
-                                            }
-                                        }, enabled = index > 0) {
-                                            Icon(MaterialSymbols.Outlined.Arrow_upward, contentDescription = "Up")
-                                        }
-                                        IconButton(onClick = {
-                                            if (index < currentOrder.size - 1) {
-                                                val temp = currentOrder[index]
-                                                currentOrder[index] = currentOrder[index + 1]
-                                                currentOrder[index + 1] = temp
-                                            }
-                                        }, enabled = index < currentOrder.size - 1) {
-                                            Icon(MaterialSymbols.Outlined.Arrow_downward, contentDescription = "Down")
-                                        }
-                                        Switch(
-                                            checked = name in currentEnabled,
-                                            onCheckedChange = { checked ->
-                                                if (checked) currentEnabled.add(name) else currentEnabled.remove(name)
-                                            }
+                    DefaultColumn {
+                        Column {
+                            Text("显示与顺序", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "长按拖动手柄调整顺序，使用开关控制是否显示",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        ReorderableList(
+                            items = currentOrder,
+                            itemKey = { it },
+                            onMove = { from, to ->
+                                currentOrder.add(to, currentOrder.removeAt(from))
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 480.dp),
+                        ) { name, dragHandleModifier ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 60.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .then(dragHandleModifier),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        MaterialSymbols.Outlined.Drag_handle,
+                                        contentDescription = "拖动 $name",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier.size(36.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        iconFor(name),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                Text(
+                                    text = name,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 8.dp),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                if (name == QUICK_REPLY_NAME) {
+                                    IconButton(onClick = { showQuickReplyConfig(context) }) {
+                                        Icon(
+                                            MaterialSymbols.Outlined.Settings,
+                                            contentDescription = "配置快捷回复",
                                         )
                                     }
-                                },
-                                headlineContent = { Text(name) },
-                            )
+                                }
+                                Switch(
+                                    checked = name in currentEnabled,
+                                    onCheckedChange = { checked ->
+                                        if (checked) {
+                                            if (name !in currentEnabled) currentEnabled.add(name)
+                                        } else {
+                                            currentEnabled.remove(name)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 },
@@ -462,41 +511,147 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
         }
     }
 
-    // shown from the cogwheel in the 快捷回复 settings row: add/modify/remove replies
-    private fun showQuickReplyConfig(context: Context) {
+    private fun showQuickReplyEditor(
+        context: Context,
+        title: String,
+        initialValue: String = "",
+        onSave: (String) -> Unit,
+    ) {
         showComposeDialog(context) {
-            val replies = remember { loadQuickReplies().toMutableStateList() }
+            var value by remember { mutableStateOf(initialValue) }
 
             AlertDialogContent(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(),
-                title = { Text("配置$QUICK_REPLY_NAME") },
+                title = { Text(title) },
                 text = {
-                    LazyColumn {
-                        itemsIndexed(replies) { index, reply ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TextField(
-                                    value = reply,
-                                    onValueChange = { replies[index] = it },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = false
+                    TextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("输入回复内容") },
+                        minLines = 3,
+                        maxLines = 8,
+                    )
+                },
+                dismissButton = { TextButton(onDismiss) { Text("取消") } },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onSave(value.trim())
+                            onDismiss()
+                        },
+                        enabled = value.isNotBlank(),
+                    ) { Text("保存") }
+                },
+            )
+        }
+    }
+
+    // Shown from the settings button in the quick-reply row.
+    @OptIn(ExperimentalFoundationApi::class)
+    private fun showQuickReplyConfig(context: Context) {
+        showComposeDialog(context) {
+            val replies = remember {
+                loadQuickReplies().map { QuickReplyDraft(text = it) }.toMutableStateList()
+            }
+
+            AlertDialogContent(
+                modifier = Modifier.fillMaxWidth(),
+                title = { Text(QUICK_REPLY_NAME) },
+                text = {
+                    DefaultColumn {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("回复内容", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "点击编辑，长按手柄调整顺序",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                IconButton(onClick = { replies.removeAt(index) }) {
-                                    Icon(MaterialSymbols.Outlined.Delete, contentDescription = "删除")
+                            }
+                            TextButton(
+                                onClick = {
+                                    showQuickReplyEditor(context, "添加快捷回复") { text ->
+                                        replies.add(QuickReplyDraft(text = text))
+                                    }
                                 }
+                            ) {
+                                Icon(MaterialSymbols.Outlined.Add, contentDescription = null)
+                                Text("添加")
                             }
                         }
-                        item {
-                            TextButton(onClick = { replies.add("") }) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(MaterialSymbols.Outlined.Add, contentDescription = null)
-                                    Text("添加")
+
+                        if (replies.isEmpty()) {
+                            Text(
+                                "暂无快捷回复，点击右上角“添加”创建。",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 28.dp),
+                            )
+                        } else {
+                            ReorderableList(
+                                items = replies,
+                                itemKey = { it.id },
+                                onMove = { from, to ->
+                                    replies.add(to, replies.removeAt(from))
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 420.dp),
+                            ) { reply, dragHandleModifier ->
+                                val editReply = {
+                                    showQuickReplyEditor(
+                                        context = context,
+                                        title = "编辑快捷回复",
+                                        initialValue = reply.text,
+                                    ) { text ->
+                                        val index = replies.indexOfFirst { it.id == reply.id }
+                                        if (index >= 0) replies[index] = reply.copy(text = text)
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 60.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .then(dragHandleModifier),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            MaterialSymbols.Outlined.Drag_handle,
+                                            contentDescription = "拖动快捷回复",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Text(
+                                        text = reply.text,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable(onClick = editReply)
+                                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    IconButton(onClick = editReply) {
+                                        Icon(
+                                            MaterialSymbols.Outlined.Edit,
+                                            contentDescription = "编辑快捷回复",
+                                        )
+                                    }
+                                    IconButton(onClick = { replies.removeAll { it.id == reply.id } }) {
+                                        Icon(
+                                            MaterialSymbols.Outlined.Delete,
+                                            contentDescription = "删除快捷回复",
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -504,7 +659,7 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
                 },
                 confirmButton = {
                     Button(onClick = {
-                        saveQuickReplies(replies.map { it.trim() }.filter { it.isNotEmpty() })
+                        saveQuickReplies(replies.map { it.text.trim() }.filter { it.isNotEmpty() })
                         onDismiss()
                     }) {
                         Text("确定")
@@ -516,6 +671,108 @@ object ChatToolbar : ClickableFeature(), IResolveDex {
                     }
                 }
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun <T> ReorderableList(
+    items: List<T>,
+    itemKey: (T) -> Any,
+    onMove: (from: Int, to: Int) -> Unit,
+    modifier: Modifier = Modifier,
+    itemContent: @Composable (item: T, dragHandleModifier: Modifier) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val hapticFeedback = LocalHapticFeedback.current
+    var draggingKey by remember { mutableStateOf<Any?>(null) }
+    var dragOffset by remember { mutableStateOf(0f) }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        userScrollEnabled = draggingKey == null,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        itemsIndexed(
+            items = items,
+            key = { _, item -> itemKey(item) },
+        ) { _, item ->
+            val key = itemKey(item)
+            val isDragging = draggingKey == key
+            val dragHandleModifier = Modifier.pointerInput(key) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        if (listState.layoutInfo.visibleItemsInfo.any { it.key == key }) {
+                            draggingKey = key
+                            dragOffset = 0f
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        }
+                    },
+                    onDragCancel = {
+                        draggingKey = null
+                        dragOffset = 0f
+                    },
+                    onDragEnd = {
+                        draggingKey = null
+                        dragOffset = 0f
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        if (draggingKey != key) return@detectDragGesturesAfterLongPress
+                        dragOffset += amount.y
+
+                        val currentInfo = listState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { it.key == key }
+                            ?: return@detectDragGesturesAfterLongPress
+                        val currentIndex = currentInfo.index
+                        val start = currentInfo.offset + dragOffset
+                        val end = start + currentInfo.size
+                        val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { targetInfo ->
+                            if (targetInfo.index == currentIndex) {
+                                false
+                            } else if (dragOffset > 0f) {
+                                targetInfo.index > currentIndex &&
+                                        end > targetInfo.offset + targetInfo.size / 2
+                            } else {
+                                targetInfo.index < currentIndex &&
+                                        start < targetInfo.offset + targetInfo.size / 2
+                            }
+                        }
+                        if (target != null) {
+                            onMove(currentIndex, target.index)
+                            dragOffset -= target.offset - currentInfo.offset
+                        }
+
+                        val viewport = listState.layoutInfo
+                        val center = currentInfo.offset + dragOffset + currentInfo.size / 2
+                        when {
+                            center < viewport.viewportStartOffset + 56 && listState.canScrollBackward ->
+                                coroutineScope.launch { listState.scrollBy(-12f) }
+
+                            center > viewport.viewportEndOffset - 56 && listState.canScrollForward ->
+                                coroutineScope.launch { listState.scrollBy(12f) }
+                        }
+                    },
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(if (isDragging) 1f else 0f)
+                    .graphicsLayer {
+                        translationY = if (isDragging) dragOffset else 0f
+                        scaleX = if (isDragging) 1.02f else 1f
+                        scaleY = if (isDragging) 1.02f else 1f
+                        shadowElevation = if (isDragging) 8.dp.toPx() else 0f
+                    }
+                    .then(if (isDragging) Modifier else Modifier.animateItem())
+            ) {
+                itemContent(item, dragHandleModifier)
+            }
         }
     }
 }

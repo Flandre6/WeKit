@@ -79,8 +79,6 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
 
     private val springInterpolator = OvershootInterpolator(1.3f)
 
-    private val overlayInterpolator = OvershootInterpolator(0.7f)
-
     private var enableSecondary by prefOption("swipe_to_quote_or_repeat_right_repeat", false)
     private var swapDirections by prefOption("swipe_to_quote_or_repeat_swap_dir", false)
 
@@ -328,8 +326,9 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
             isUseEdit = { useEditInsteadOfRepeat },
             isSecondaryDir = ::isSecondaryDirection,
         ).also { s.actionOverlay = it }
-        val progress = overlayInterpolator.getInterpolation(rawProgress.coerceIn(0f, 1f))
-            .coerceIn(0f, 1f)
+        // Keep the icon directly under the finger while dragging. Applying an overshoot
+        // interpolator here makes its distance from the edge nonlinear relative to the row.
+        val progress = rawProgress.coerceIn(0f, 1f)
         overlay.update(row, direction, progress)
     }
 

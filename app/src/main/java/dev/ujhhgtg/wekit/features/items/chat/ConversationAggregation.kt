@@ -52,6 +52,9 @@ import dev.ujhhgtg.wekit.features.api.core.models.IWeContact
 import dev.ujhhgtg.wekit.features.api.ui.WeStartActivityApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.items.chat.ConversationAggregation.clearStaleFolderMappings
+import dev.ujhhgtg.wekit.features.items.chat.ConversationAggregation.composeFolderFlag
+import dev.ujhhgtg.wekit.features.items.chat.ConversationAggregation.syncFoldersToDatabase
 import dev.ujhhgtg.wekit.features.items.contacts.CustomLocalFriendAvatars
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.BaseContactSelector
@@ -310,8 +313,14 @@ object ConversationAggregation : ClickableFeature(),
         showEditFolderDialog(
             context = context,
             folder = updated,
-            onFolderUpdated = { syncFoldersToDatabase() },
-            onFolderDeleted = { syncFoldersToDatabase() }
+            onFolderUpdated = {
+                syncFoldersToDatabase()
+                WeConversationApi.reloadConversations()
+            },
+            onFolderDeleted = {
+                syncFoldersToDatabase()
+                WeConversationApi.reloadConversations()
+            }
         )
         return true
     }

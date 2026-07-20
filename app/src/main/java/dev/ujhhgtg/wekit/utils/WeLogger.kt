@@ -8,8 +8,10 @@ import java.io.FileWriter
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.div
 import kotlin.math.min
 
@@ -19,24 +21,48 @@ object WeLogger {
 
     private const val CHUNK_SIZE = 4000
     private const val MAX_CHUNKS = 200
+    private const val QUEUE_CAPACITY = 2048
+    private const val RESERVED_IMPORTANT_CAPACITY = 128
+    private const val BATCH_SIZE = 64
+    private const val FLUSH_TIMEOUT_MILLIS = 3000L
 
     private val timestampFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
-    private val lock = ReentrantLock()
+    private sealed interface WriteTask {
+        data class Record(
+            val level: String,
+            val tag: String?,
+            val msg: String,
+            val throwable: Throwable?,
+            val timestamp: LocalDateTime,
+        ) : WriteTask
+
+        class Flush(val completed: CountDownLatch) : WriteTask
+    }
+
+    /**
+     * A bounded queue keeps logging fire-and-forget even if storage is temporarily slow. A
+     * dropped-record counter is emitted by the writer once it catches up, so loss is visible.
+     */
+    private val writeQueue = ArrayBlockingQueue<WriteTask>(QUEUE_CAPACITY, true)
+    private val droppedRecords = AtomicLong()
+    private val writerThread = Thread(::runWriter, "WeKit-Logger").apply {
+        isDaemon = true
+        start()
+    }
 
     private var writer: FileWriter? = null
     private var currentLogDate: LocalDate? = null
 
     // ========== File Logging Internals ==========
 
-    private fun getOrRotateWriter(): FileWriter? {
-        val today = LocalDate.now()
-
-        if (writer != null && currentLogDate == today) return writer
+    private fun getOrRotateWriter(logDate: LocalDate): FileWriter? {
+        if (writer != null && currentLogDate == logDate) return writer
 
         writer?.runCatching { close() }
         writer = null
+        currentLogDate = null
 
         val logsDir = runCatching {
             (KnownPaths.moduleData / "logs").createDirsSafe()
@@ -45,12 +71,12 @@ object WeLogger {
         // Clean up logs older than 3 days during rotation/initialization
         deleteOldLogs(logsDir)
 
-        val logPath = logsDir / "wekit-${dateFmt.format(today)}.log"
+        val logPath = logsDir / "wekit-${dateFmt.format(logDate)}.log"
 
         return runCatching {
             FileWriter(logPath.toFile(), true).also {
                 writer = it
-                currentLogDate = today
+                currentLogDate = logDate
             }
         }.getOrNull()
     }
@@ -75,30 +101,135 @@ object WeLogger {
         }
     }
 
-    private fun writeToFile(level: String, tag: String?, msg: String, throwable: Throwable? = null) {
-        lock.withLock {
-            val w = getOrRotateWriter() ?: return
-            runCatching {
-                val ts = timestampFmt.format(LocalDateTime.now())
-                w.write(buildString {
-                    append("$ts $level/$TAG $tag: $msg")
-                    if (throwable != null) {
-                        append('\n')
-                        append(Log.getStackTraceString(throwable))
-                    }
-                })
-                w.write("\n")
-                w.flush() // Force immediate write to the filesystem descriptor
+    private fun runWriter() {
+        val batch = ArrayList<WriteTask>(BATCH_SIZE)
+
+        while (!Thread.currentThread().isInterrupted) {
+            val first = try {
+                writeQueue.take()
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
             }
+            batch += first
+            writeQueue.drainTo(batch, BATCH_SIZE - 1)
+
+            var hasWrites = false
+            batch.forEach { task ->
+                when (task) {
+                    is WriteTask.Record -> {
+                        writeDroppedNotice(task.timestamp)
+                        val written = writeRecord(task)
+                        hasWrites = written || hasWrites
+                        if (written && (task.level == "E" || task.level == "W" || task.level == "A")) {
+                            flushWriter()
+                            hasWrites = false
+                        }
+                    }
+
+                    is WriteTask.Flush -> {
+                        try {
+                            writeDroppedNotice(LocalDateTime.now())
+                            flushWriter()
+                        } finally {
+                            task.completed.countDown()
+                        }
+                        hasWrites = false
+                    }
+                }
+            }
+
+            if (hasWrites) flushWriter()
+            batch.clear()
+        }
+    }
+
+    private fun writeRecord(record: WriteTask.Record): Boolean {
+        val w = getOrRotateWriter(record.timestamp.toLocalDate()) ?: return false
+        return runCatching {
+            w.write(buildString {
+                append(timestampFmt.format(record.timestamp))
+                append(' ')
+                append(record.level)
+                append('/')
+                append(TAG)
+                append(' ')
+                append(record.tag)
+                append(": ")
+                append(record.msg)
+                if (record.throwable != null) {
+                    append('\n')
+                    append(Log.getStackTraceString(record.throwable))
+                }
+            })
+            w.write('\n'.code)
+            true
+        }.getOrElse {
+            Log.e(TAG, "failed to write log file", it)
+            false
+        }
+    }
+
+    private fun writeDroppedNotice(timestamp: LocalDateTime) {
+        val count = droppedRecords.getAndSet(0)
+        if (count == 0L) return
+
+        writeRecord(
+            WriteTask.Record(
+                level = "W",
+                tag = "WeLogger",
+                msg = "dropped $count log record(s) because the async queue was full or reserved for important logs",
+                throwable = null,
+                timestamp = timestamp,
+            )
+        )
+    }
+
+    private fun flushWriter() {
+        writer?.runCatching { flush() }
+    }
+
+    private fun enqueue(record: WriteTask.Record) {
+        val isImportant = record.level == "E" || record.level == "W" || record.level == "A"
+        val hasRoom = isImportant || writeQueue.remainingCapacity() > RESERVED_IMPORTANT_CAPACITY
+        if (!hasRoom || !writeQueue.offer(record)) {
+            droppedRecords.incrementAndGet()
         }
     }
 
     /**
-     * Flush buffered log writes to disk. Call this from crash handlers to ensure no logs are lost.
+     * Wait for all records currently queued, then flush the active writer. This is intentionally
+     * blocking because it is used at explicit synchronization points such as crash handling and
+     * before the log viewer reads the current file; normal log calls never wait for the writer.
      */
     fun flush() {
-        lock.withLock {
-            writer?.runCatching { flush() }
+        if (Thread.currentThread() === writerThread) {
+            writeDroppedNotice(LocalDateTime.now())
+            flushWriter()
+            return
+        }
+
+        val completed = CountDownLatch(1)
+        val barrier = WriteTask.Flush(completed)
+        val enqueued = try {
+            writeQueue.offer(barrier, FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!enqueued) {
+            Log.w(TAG, "timed out while enqueueing log flush barrier")
+            return
+        }
+
+        val finished = try {
+            completed.await(FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!finished) {
+            Log.w(TAG, "timed out while flushing log queue")
         }
     }
 
@@ -130,54 +261,54 @@ object WeLogger {
 
     fun e(tag: String?, msg: String) {
         Log.e(TAG, "$tag: $msg")
-        writeToFile("E", tag, msg)
+        enqueue(WriteTask.Record("E", tag, msg, null, LocalDateTime.now()))
     }
 
     fun w(tag: String?, msg: String) {
         Log.w(TAG, "$tag: $msg")
-        writeToFile("W", tag, msg)
+        enqueue(WriteTask.Record("W", tag, msg, null, LocalDateTime.now()))
     }
 
     fun i(tag: String?, msg: String) {
         Log.i(TAG, "$tag: $msg")
-        writeToFile("I", tag, msg)
+        enqueue(WriteTask.Record("I", tag, msg, null, LocalDateTime.now()))
     }
 
     fun d(tag: String?, msg: String) {
         Log.d(TAG, "$tag: $msg")
-        writeToFile("D", tag, msg)
+        enqueue(WriteTask.Record("D", tag, msg, null, LocalDateTime.now()))
     }
 
     fun v(tag: String?, msg: String) {
         Log.v(TAG, "$tag: $msg")
-        writeToFile("V", tag, msg)
+        enqueue(WriteTask.Record("V", tag, msg, null, LocalDateTime.now()))
     }
 
     // ========== Tag + String + Throwable ==========
 
     fun e(tag: String?, msg: String, e: Throwable) {
         Log.e(TAG, "$tag: $msg", e)
-        writeToFile("E", tag, msg, e)
+        enqueue(WriteTask.Record("E", tag, msg, e, LocalDateTime.now()))
     }
 
     fun w(tag: String?, msg: String, e: Throwable) {
         Log.w(TAG, "$tag: $msg", e)
-        writeToFile("W", tag, msg, e)
+        enqueue(WriteTask.Record("W", tag, msg, e, LocalDateTime.now()))
     }
 
     fun i(tag: String?, msg: String, e: Throwable) {
         Log.i(TAG, "$tag: $msg", e)
-        writeToFile("I", tag, msg, e)
+        enqueue(WriteTask.Record("I", tag, msg, e, LocalDateTime.now()))
     }
 
     fun d(tag: String?, msg: String, e: Throwable) {
         Log.d(TAG, "$tag: $msg", e)
-        writeToFile("D", tag, msg, e)
+        enqueue(WriteTask.Record("D", tag, msg, e, LocalDateTime.now()))
     }
 
     fun v(tag: String?, msg: String, e: Throwable) {
         Log.v(TAG, "$tag: $msg", e)
-        writeToFile("V", tag, msg, e)
+        enqueue(WriteTask.Record("V", tag, msg, e, LocalDateTime.now()))
     }
 
     // ========== Stack Trace ==========
@@ -196,7 +327,7 @@ object WeLogger {
     fun logChunked(priority: Int, tag: String, msg: String) {
         if (msg.length <= CHUNK_SIZE) {
             Log.println(priority, TAG, "$tag: $msg")
-            writeToFile(priority.toPriorityChar(), tag, msg)
+            enqueue(WriteTask.Record(priority.toPriorityChar(), tag, msg, null, LocalDateTime.now()))
             return
         }
 
@@ -208,19 +339,21 @@ object WeLogger {
             val truncMsg = "[chunked] truncated. consider writing to file for full dump."
             Log.println(priority, TAG, "$tag: $headMsg")
             Log.println(priority, TAG, "$tag: $truncMsg")
-            writeToFile(priority.toPriorityChar(), tag, headMsg)
-            writeToFile(priority.toPriorityChar(), tag, truncMsg)
+            val timestamp = LocalDateTime.now()
+            enqueue(WriteTask.Record(priority.toPriorityChar(), tag, headMsg, null, timestamp))
+            enqueue(WriteTask.Record(priority.toPriorityChar(), tag, truncMsg, null, timestamp))
             return
         }
 
         var i = 0
         var part = 1
+        val timestamp = LocalDateTime.now()
         while (i < len) {
             val end = min(i + CHUNK_SIZE, len)
             val chunk = msg.substring(i, end)
             val partMsg = "[part $part/$chunkCount] $chunk"
             Log.println(priority, TAG, "$tag: $partMsg")
-            writeToFile(priority.toPriorityChar(), tag, partMsg)
+            enqueue(WriteTask.Record(priority.toPriorityChar(), tag, partMsg, null, timestamp))
             i += CHUNK_SIZE
             part++
         }

@@ -1,5 +1,8 @@
 package dev.ujhhgtg.wekit.features.items.shortvideos
 
+import android.net.Uri
+import android.util.Base64
+import androidx.core.net.toUri
 import dev.ujhhgtg.wekit.features.api.ui.WeShortVideosShareMenuApi
 import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
@@ -29,6 +32,9 @@ object DownloadMedia : SwitchFeature(),
     WeShortVideosShareMenuApi.IMenuItemsProvider {
 
     private const val TAG = "DownloadMedia"
+    private const val ENCRYPTED_PREFIX_SIZE = 128 * 1024
+    private const val VIDEO_FORMAT_H265 = 2
+    private const val VIDEO_FORMAT_H266 = 3
 
     override fun onEnable() {
         WeShortVideosShareMenuApi.addProvider(this)
@@ -44,8 +50,7 @@ object DownloadMedia : SwitchFeature(),
                 777004,
                 "复制链接",
                 LinkIcon
-            )
-            { _, mediaType, mediaList ->
+            ) { _, mediaType, mediaList ->
                 if (mediaType == 2) {
                     val imageUrls = mediaList.map { json ->
                         json.getString("url") + json.getString("url_token")
@@ -65,7 +70,7 @@ object DownloadMedia : SwitchFeature(),
                     val size = json.getInt("fileSize")
                     val displayDuration = "%02d:%02d:%02d".format(
                         Locale.CHINA,
-                        duration / 3600, (duration % 3600) / 60, duration % 60
+                        duration / 3600, duration % 3600 / 60, duration % 60
                     )
                     val displaySize = formatBytesSize(size.toLong())
                     clipItems += "时长" to displayDuration
@@ -76,7 +81,7 @@ object DownloadMedia : SwitchFeature(),
                         val url = json.getString("url")
                         val urlToken = json.getString("url_token")
                         val decodeKey = json.getString("decodeKey")
-                        clipItems += "密链" to (url + urlToken)
+                        clipItems += "密链" to url + urlToken
                         clipItems += "密钥" to decodeKey
                     } else {
                         clipItems += "链接" to json.getString("pcdn_url")
@@ -88,14 +93,13 @@ object DownloadMedia : SwitchFeature(),
                     return@MenuItem
                 }
 
-                showToast("未知的媒体类型, 无法复制链接")
+                showToast("未知的媒体类型!")
             },
             WeShortVideosShareMenuApi.MenuItem(
                 777007,
                 "下载",
                 DownloadIcon
-            )
-            { _, mediaType, mediaList ->
+            ) { _, mediaType, mediaList ->
                 if (mediaType == 2) {
                     val imageUrls = mediaList.map { json ->
                         json.getString("url") + json.getString("url_token")
@@ -132,7 +136,7 @@ object DownloadMedia : SwitchFeature(),
                     return@MenuItem
                 }
 
-                showToast("未知的媒体类型, 无法下载")
+                showToast("未知的媒体类型!")
             }
         )
     }
@@ -159,26 +163,26 @@ object DownloadMedia : SwitchFeature(),
         url: String,
         urlToken: String
     ) = withContext(Dispatchers.IO) {
-        showToastSuspend("开始下载并解密视频")
+        showToastSuspend("正在下载视频...")
 
         val baseDir = KnownPaths.downloads
         val fileName = "video_${System.currentTimeMillis()}.mp4"
         val tempFilePath = baseDir / "${fileName}.tmp"
         val finalFilePath = baseDir / fileName
 
-        val fullUrl = url + urlToken
+        val fullUrl = preferCompatibleVideoFormat(url + urlToken)
 
         runCatching {
             downloadFile(fullUrl, tempFilePath)
 
-            showToastSuspend("开始解密视频")
+            showToastSuspend("正在解密视频...")
             val key = BigInteger(decodeKey)
             decryptFile(tempFilePath, finalFilePath, key)
 
             tempFilePath.deleteIfExists()
         }.onFailure {
             WeLogger.e(TAG, "failed to download video", it)
-            showToastSuspend("视频下载失败")
+            showToastSuspend("视频下载失败!")
         }.onSuccess {
             showToastSuspend("已将视频下载到 /sdcard/Download/WeKit/$fileName")
         }
@@ -209,21 +213,63 @@ object DownloadMedia : SwitchFeature(),
     private fun decryptFile(originalPath: Path, newPath: Path, bigIntDecodeKey: BigInteger) {
         originalPath.inputStream().use { fileInputStream ->
             newPath.outputStream().use { fileOutputStream ->
-                val buffer = ByteArray(32 * 1024 * 1024) // 32 MB buffer as per decompiled code
-
-                while (true) {
-                    val bytesRead = fileInputStream.read(buffer)
-                    if (bytesRead == -1) {
-                        break
-                    }
-
-                    // Decrypt the buffer in-place
-                    decryptBuffer(buffer, bigIntDecodeKey)
-
-                    // Write only the bytes that were read
-                    fileOutputStream.write(buffer, 0, bytesRead)
+                val encryptedPrefix = ByteArray(ENCRYPTED_PREFIX_SIZE)
+                var prefixSize = 0
+                while (prefixSize < encryptedPrefix.size) {
+                    val bytesRead = fileInputStream.read(
+                        encryptedPrefix,
+                        prefixSize,
+                        encryptedPrefix.size - prefixSize
+                    )
+                    if (bytesRead == -1) break
+                    prefixSize += bytesRead
                 }
+
+                decryptBuffer(encryptedPrefix, bigIntDecodeKey)
+                fileOutputStream.write(encryptedPrefix, 0, prefixSize)
+                fileInputStream.copyTo(fileOutputStream)
             }
+        }
+    }
+
+    /**
+     * Finder CDN URLs carry the requested codec as field 1 of the basedata protobuf.
+     * H.266 is not supported by most external players, so request the H.265 variant.
+     */
+    private fun preferCompatibleVideoFormat(url: String): String {
+        return runCatching {
+            val uri = url.toUri()
+            val baseData = uri.getQueryParameter("basedata") ?: return url
+            val decoded = Base64.decode(
+                baseData,
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            )
+
+            if (
+                decoded.size < 2 ||
+                decoded[0] != 0x08.toByte() ||
+                decoded[1].toInt() != VIDEO_FORMAT_H266
+            ) {
+                return url
+            }
+
+            decoded[1] = VIDEO_FORMAT_H265.toByte()
+            val replacement = Base64.encodeToString(
+                decoded,
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            )
+            val encodedQuery = uri.encodedQuery ?: return url
+            val oldParameter = "basedata=${Uri.encode(baseData)}"
+            val newParameter = "basedata=${Uri.encode(replacement)}"
+            val newQuery = encodedQuery.replaceFirst(oldParameter, newParameter)
+
+            if (newQuery == encodedQuery) url else uri.buildUpon()
+                .encodedQuery(newQuery)
+                .build()
+                .toString()
+        }.getOrElse {
+            WeLogger.w(TAG, "failed to request a compatible Finder video format", it)
+            url
         }
     }
 
@@ -237,7 +283,7 @@ object DownloadMedia : SwitchFeature(),
         }
 
         val cryptoState = CryptoState(key)
-        val limit = 128 * 1024 // 128 KB limit per chunk
+        val limit = ENCRYPTED_PREFIX_SIZE
 
         // Process the first 128KB of the buffer in 8-byte blocks
         for (i in 0 until limit step 8) {

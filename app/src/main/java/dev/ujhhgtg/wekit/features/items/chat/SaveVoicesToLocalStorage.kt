@@ -3,6 +3,7 @@ package dev.ujhhgtg.wekit.features.items.chat
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Download
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
+import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.api.core.models.MessageType
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageContextMenuApi
 import dev.ujhhgtg.wekit.features.core.Feature
@@ -34,18 +35,43 @@ object SaveVoicesToLocalStorage : SwitchFeature(), WeChatMessageContextMenuApi.I
                 "存本地",
                 DownloadIcon,
                 MaterialSymbols.Outlined.Download,
-                { msgInfo -> msgInfo.typeCode == MessageType.VOICE.code }
-            ) { _, _, msgInfo ->
-                val encPath = msgInfo.imagePath!!
+                { msgInfo -> msgInfo.typeCode == MessageType.VOICE.code },
+                multiSelect = WeChatMessageContextMenuApi.MultiSelectSupport.Adapted(
+                    isSupported = { msgs ->
+                        msgs.isNotEmpty() && msgs.all { it.typeCode == MessageType.VOICE.code }
+                    },
+                    onClick = { view, _, msgs ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            var succeeded = 0
+                            msgs.forEach { if (saveVoice(it) != null) succeeded++ }
+                            showToastSuspend(
+                                view.context,
+                                "已保存 $succeeded/${msgs.size} 条语音到本地",
+                            )
+                        }
+                    },
+                )
+            ) { view, _, msgInfo ->
                 CoroutineScope(Dispatchers.IO).launch {
-                    val path = WeMessageApi.saveVoiceByEncPath(encPath) ?: run {
-                        WeLogger.e(TAG, "failed to save voice")
-                        showToastSuspend("语音保存失败! 查看日志以了解错误详情")
-                        return@launch
-                    }
-                    showToastSuspend("已将语音保存到 $path")
+                    val path = saveVoice(msgInfo)
+                    showToastSuspend(
+                        view.context,
+                        path?.let { "已将语音保存到 $it" }
+                            ?: "语音保存失败! 查看日志以了解错误详情",
+                    )
                 }
             }
         )
+    }
+
+    private suspend fun saveVoice(msgInfo: MessageInfo): String? {
+        val encPath = msgInfo.imagePath ?: run {
+            WeLogger.e(TAG, "voice imagePath is null")
+            return null
+        }
+        return WeMessageApi.saveVoiceByEncPath(encPath) ?: run {
+            WeLogger.e(TAG, "failed to save voice encPath=$encPath")
+            null
+        }
     }
 }

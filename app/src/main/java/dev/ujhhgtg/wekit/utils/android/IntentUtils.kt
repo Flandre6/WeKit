@@ -7,6 +7,9 @@ import kotlin.contracts.contract
 
 @OptIn(ExperimentalContracts::class)
 inline fun Intent(block: Intent.() -> Unit): Intent {
-    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    contract {
+        callsInPlace(block, InvocationKind.EXACTLY_ONCE)
+    }
+
     return Intent().apply(block)
 }

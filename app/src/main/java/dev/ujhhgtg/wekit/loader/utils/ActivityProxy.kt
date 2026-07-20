@@ -182,7 +182,9 @@ object ActivityProxy {
         }
 
         private fun shouldProxy(intent: Intent): Boolean =
-            intent.component?.let { ActProxyMgr.isModuleProxyActivity(it.className) } == true
+            intent.component?.let {
+                it.packageName == HostInfo.packageName && ActProxyMgr.isModuleProxyActivity(it.className)
+            } == true
 
         private fun createTokenWrapper(raw: Intent): Intent {
             val token = IntentTokenCache.put(Intent(raw))
@@ -486,7 +488,10 @@ object ActivityProxy {
                         is ComponentName -> component = arg
                     }
                 }
-                if (component != null && ActProxyMgr.isModuleProxyActivity(component.className)) {
+                if (component != null &&
+                    component.packageName == HostInfo.packageName &&
+                    ActProxyMgr.isModuleProxyActivity(component.className)
+                ) {
                     return CounterfeitActivityInfoFactory.makeProxyActivityInfo(component.className)
                 }
             }

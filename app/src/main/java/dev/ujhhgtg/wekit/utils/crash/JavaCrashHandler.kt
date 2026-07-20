@@ -31,6 +31,7 @@ object JavaCrashHandler : Thread.UncaughtExceptionHandler {
                 TAG,
                 "recursive crash detected, delegating to default handler"
             )
+            runCatching { WeLogger.flush() }
             defaultHandler?.uncaughtException(thread, throwable)
             return
         }
@@ -68,10 +69,17 @@ object JavaCrashHandler : Thread.UncaughtExceptionHandler {
             // 调用默认处理器，让应用正常崩溃
             if (defaultHandler != null) {
                 WeLogger.i(TAG, "delegating to default handler")
-                defaultHandler.uncaughtException(thread, throwable)
             } else {
                 // 如果没有默认处理器，手动终止进程
                 WeLogger.e(TAG, "no default handler, killing process")
+            }
+
+            // The logger is asynchronous; make the crash details durable before the process exits.
+            runCatching { WeLogger.flush() }
+
+            if (defaultHandler != null) {
+                defaultHandler.uncaughtException(thread, throwable)
+            } else {
                 exitProcess(1)
             }
         }

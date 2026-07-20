@@ -108,7 +108,6 @@ object AutoCacheFiles : ClickableFeature(),
         when {
             file.isSenderUploading -> {
                 WeLogger.i(TAG, "file msg $msgSvrId: sender still uploading (appmsgType=${file.appMsgType}), deferring")
-                showToast("对方文件尚未上传完成, 等待中...")
                 return
             }
 

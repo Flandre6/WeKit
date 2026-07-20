@@ -1,8 +1,6 @@
 package dev.ujhhgtg.wekit.features.items.chat
 
-import android.content.Context
 import android.graphics.Outline
-import android.util.AttributeSet
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -28,8 +26,7 @@ import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
-import dev.ujhhgtg.wekit.utils.reflection.BInt
-import dev.ujhhgtg.wekit.utils.reflection.int
+import dev.ujhhgtg.wekit.utils.android.constructor
 import kotlin.math.roundToInt
 
 @Feature(
@@ -75,13 +72,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val reflekt = ChatFooter::class.reflekt()
 
         // Outline + elevation can be set immediately after construction (no LayoutParams needed)
-        reflekt.run {
-            firstConstructorOrNull {
-                parameters(Context::class, AttributeSet::class, int)
-            } ?: firstConstructor {
-                parameters(Context::class, AttributeSet::class, BInt)
-            }
-        }.hookAfter {
+        ChatFooter::class.constructor.hookAfter {
             applyDrawingStyle(thisObject as ChatFooter)
         }
 

@@ -15,7 +15,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -24,7 +27,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -40,17 +48,23 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.outlined.Delete
+import com.composables.icons.materialsymbols.outlined.Drag_handle
 import com.composables.icons.materialsymbols.outlinedfilled.Add
 import com.composables.icons.materialsymbols.outlinedfilled.Bookmark
 import com.composables.icons.materialsymbols.outlinedfilled.Camera
@@ -72,6 +86,7 @@ import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.preferences.WePrefs
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.DefaultColumn
+import dev.ujhhgtg.wekit.ui.content.IconButton
 import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.InjectedUiTheme
 import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
@@ -81,6 +96,8 @@ import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
 import dev.ujhhgtg.wekit.utils.killHost
+import dev.ujhhgtg.wekit.utils.restartHost
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -96,6 +113,7 @@ object AddMainScreenFab : ClickableFeature() {
         START_ACTIVITY,
         MARK_ALL_READ,
         MODULE_SETTINGS,
+        RESTART_HOST,
         FORCE_STOP
     }
 
@@ -143,6 +161,7 @@ object AddMainScreenFab : ClickableFeature() {
         FabItemConfig("4", FabType.START_ACTIVITY, "视频号", "Movie", "com.tencent.mm.plugin.finder.ui.FinderHomeAffinityUI"),
         FabItemConfig("5", FabType.START_ACTIVITY, "设置", "Settings", "com.tencent.mm.plugin.setting.ui.setting_new.MainSettingsUI"),
         FabItemConfig("6", FabType.MODULE_SETTINGS, "模块设置", "Extension"),
+        FabItemConfig("9", FabType.RESTART_HOST, "重启微信", "Update"),
         FabItemConfig("7", FabType.FORCE_STOP, "强行停止", "Cancel"),
         FabItemConfig("8", FabType.MARK_ALL_READ, "清空未读", "Check_circle")
     )
@@ -206,6 +225,10 @@ object AddMainScreenFab : ClickableFeature() {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             })
                         }
+                    }
+
+                    FabType.RESTART_HOST -> {
+                        { restartHost() }
                     }
 
                     FabType.FORCE_STOP -> {
@@ -321,255 +344,140 @@ object AddMainScreenFab : ClickableFeature() {
         }
     }
 
-    // 实现配置弹窗后台逻辑
-    override fun onClick(context: ComponentActivity) {
+    private fun showAddFabDialog(
+        context: Context,
+        existingItems: List<FabItemConfig>,
+        onAdd: (FabItemConfig) -> Unit,
+    ) {
         showComposeDialog(context) {
-            var currentItems by remember { mutableStateOf(loadConfig()) }
-            var showAddSection by remember { mutableStateOf(false) }
-
-            // 添加新组件的状态收集
             var newType by remember { mutableStateOf(FabType.START_ACTIVITY) }
             var newName by remember { mutableStateOf("") }
             var newActivity by remember { mutableStateOf("") }
             var newIconName by remember { mutableStateOf("Qr_code_scanner") }
 
+            val hasType = { type: FabType -> existingItems.any { it.type == type } }
+            val canAdd = newName.isNotBlank() &&
+                    (newType != FabType.START_ACTIVITY || newActivity.isNotBlank())
+
             AlertDialogContent(
-                title = { Text("FAB 悬浮按钮配置") },
+                title = { Text("添加快捷按钮") },
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
-                        if (showAddSection) {
-                            // 新建或添加单项控制逻辑
-                            Text("添加新功能按钮", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(
+                            "选择要放到主屏幕 FAB 菜单里的功能。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "功能类型",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
 
-                            Text("按钮响应类型:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = newType == FabType.START_ACTIVITY, onClick = { newType = FabType.START_ACTIVITY })
-                                Text("自定义启动页 (Activity)", modifier = Modifier.clickable { newType = FabType.START_ACTIVITY })
-                            }
-
-                            // 控制代码功能唯一性出现
-                            val hasMarkRead = currentItems.any { it.type == FabType.MARK_ALL_READ }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(
-                                    selected = newType == FabType.MARK_ALL_READ,
-                                    onClick = { if (!hasMarkRead) newType = FabType.MARK_ALL_READ },
-                                    enabled = !hasMarkRead
-                                )
-                                Text(
-                                    "清空未读",
-                                    color = if (hasMarkRead) Color.Gray else Color.Unspecified,
-                                    modifier = Modifier.clickable(enabled = !hasMarkRead) { newType = FabType.MARK_ALL_READ })
-                            }
-
-                            val hasModule = currentItems.any { it.type == FabType.MODULE_SETTINGS }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(
-                                    selected = newType == FabType.MODULE_SETTINGS,
-                                    onClick = { if (!hasModule) newType = FabType.MODULE_SETTINGS },
-                                    enabled = !hasModule
-                                )
-                                Text(
-                                    "模块设置",
-                                    color = if (hasModule) Color.Gray else Color.Unspecified,
-                                    modifier = Modifier.clickable(enabled = !hasModule) { newType = FabType.MODULE_SETTINGS })
-                            }
-
-                            val hasForce = currentItems.any { it.type == FabType.FORCE_STOP }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(
-                                    selected = newType == FabType.FORCE_STOP,
-                                    onClick = { if (!hasForce) newType = FabType.FORCE_STOP },
-                                    enabled = !hasForce
-                                )
-                                Text(
-                                    "强行停止",
-                                    color = if (hasForce) Color.Gray else Color.Unspecified,
-                                    modifier = Modifier.clickable(enabled = !hasForce) { newType = FabType.FORCE_STOP })
-                            }
-
-                            OutlinedTextField(
-                                value = newName,
-                                onValueChange = { newName = it },
-                                label = { Text("显示按钮文本名称") },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 8.dp)
-                            )
-
-                            if (newType == FabType.START_ACTIVITY) {
-                                OutlinedTextField(
-                                    value = newActivity,
-                                    onValueChange = { newActivity = it },
-                                    label = { Text("Activity 完整类名") },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp)
-                                )
-
-                                Text(
-                                    "系统预设快捷填入 (点击填入):",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(top = 8.dp)
-                                )
-                                Column {
-                                    presets.forEach { (pName, pClass) ->
-                                        Text(
-                                            text = "• $pName ($pClass)",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    newActivity = pClass
-                                                    if (newName.isEmpty()) newName = pName
-                                                }
-                                                .padding(vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            Text("选择展示图标:", fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                        val typeOptions = listOf(
+                            FabType.START_ACTIVITY to "启动 Activity",
+                            FabType.MARK_ALL_READ to "清空未读",
+                            FabType.MODULE_SETTINGS to "模块设置",
+                            FabType.RESTART_HOST to "重启微信",
+                            FabType.FORCE_STOP to "强行停止",
+                        )
+                        typeOptions.forEach { (type, label) ->
+                            val unavailable = type != FabType.START_ACTIVITY && hasType(type)
                             Row(
                                 modifier = Modifier
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(vertical = 6.dp)
-                            ) {
-                                iconPool.keys.forEach { iconName ->
-                                    val isSelected = newIconName == iconName
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(4.dp)
-                                            .clickable { newIconName = iconName }
-                                            .padding(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = iconPool[iconName]!!,
-                                            contentDescription = iconName,
-                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray
-                                        )
-                                    }
-                                }
-                            }
-
-                            Row(
-                                horizontalArrangement = Arrangement.End, modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 16.dp)
-                            ) {
-                                TextButton({ showAddSection = false }) { Text("返回列表") }
-                                TextButton({
-                                    if (newName.isNotBlank() && (newType != FabType.START_ACTIVITY || newActivity.isNotBlank())) {
-                                        val newItem = FabItemConfig(
-                                            id = UUID.randomUUID().toString(),
-                                            type = newType,
-                                            name = newName,
-                                            iconName = newIconName,
-                                            targetActivity = if (newType == FabType.START_ACTIVITY) newActivity else null
-                                        )
-                                        val updated = currentItems + newItem
-                                        currentItems = updated
-                                        saveConfig(updated)
-                                        showAddSection = false
-                                    }
-                                }) { Text("添加保存") }
-                            }
-                        } else {
-                            // 列表展示页：增删改查及排序
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                    .clickable(enabled = !unavailable) { newType = type },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("定制按钮顺序及内容", fontWeight = FontWeight.SemiBold)
-                                TextButton({
-                                    showAddSection = true
-                                    newName = ""
-                                    newActivity = ""
-                                    newType = FabType.START_ACTIVITY
-                                    newIconName = "Qr_code_scanner"
-                                }) { Text("+ 添加按钮") }
+                                RadioButton(
+                                    selected = newType == type,
+                                    onClick = { newType = type },
+                                    enabled = !unavailable,
+                                )
+                                Text(
+                                    text = if (unavailable) "$label（已添加）" else label,
+                                    color = if (unavailable) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
+                                )
                             }
+                        }
 
-                            // FIX: removed inner verticalScroll + heightIn — the outer DefaultColumn
-                            // already scrolls. Nesting two same-direction scroll containers causes
-                            // Compose to give the inner one zero/capped height, cutting off the list.
-                            Column {
-                                if (currentItems.isEmpty()) {
-                                    Text("当前没有任何悬浮节点, 请先添加", color = Color.Gray, modifier = Modifier.padding(16.dp))
-                                }
-                                currentItems.forEachIndexed { index, item ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = iconPool[item.iconName] ?: MaterialSymbols.OutlinedFilled.Add,
-                                            contentDescription = null,
-                                            modifier = Modifier.padding(end = 8.dp),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(item.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                            Text(
-                                                text = when (item.type) {
-                                                    FabType.START_ACTIVITY -> item.targetActivity ?: ""
-                                                    FabType.MARK_ALL_READ -> "核心功能: 标记全部消息为已读"
-                                                    FabType.MODULE_SETTINGS -> "核心功能: 打开模块设置"
-                                                    FabType.FORCE_STOP -> "核心功能: 终止微信进程"
-                                                },
-                                                fontSize = 11.sp,
-                                                color = Color.Gray
-                                            )
+                        OutlinedTextField(
+                            value = newName,
+                            onValueChange = { newName = it },
+                            label = { Text("按钮名称") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                        )
+
+                        if (newType == FabType.START_ACTIVITY) {
+                            OutlinedTextField(
+                                value = newActivity,
+                                onValueChange = { newActivity = it },
+                                label = { Text("Activity 完整类名") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp),
+                            )
+                            Text(
+                                "预设入口",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 12.dp)
+                            )
+                            presets.forEach { (presetName, presetClass) ->
+                                Text(
+                                    text = "$presetName  ·  $presetClass",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            newActivity = presetClass
+                                            if (newName.isBlank()) newName = presetName
                                         }
-                                        // 排序：上移
-                                        Text(
-                                            text = "↑",
-                                            modifier = Modifier
-                                                .clickable(enabled = index > 0) {
-                                                    val list = currentItems.toMutableList()
-                                                    val temp = list[index]
-                                                    list[index] = list[index - 1]
-                                                    list[index - 1] = temp
-                                                    currentItems = list
-                                                    saveConfig(list)
-                                                }
-                                                .padding(8.dp),
-                                            color = if (index > 0) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        // 排序：下移
-                                        Text(
-                                            text = "↓",
-                                            modifier = Modifier
-                                                .clickable(enabled = index < currentItems.size - 1) {
-                                                    val list = currentItems.toMutableList()
-                                                    val temp = list[index]
-                                                    list[index] = list[index + 1]
-                                                    list[index + 1] = temp
-                                                    currentItems = list
-                                                    saveConfig(list)
-                                                }
-                                                .padding(8.dp),
-                                            color = if (index < currentItems.size - 1) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        // 删除功能
-                                        Text(
-                                            text = "删除",
-                                            modifier = Modifier
-                                                .clickable {
-                                                    val list = currentItems.toMutableList()
-                                                    list.removeAt(index)
-                                                    currentItems = list
-                                                    saveConfig(list)
-                                                }
-                                                .padding(8.dp),
-                                            color = Color.Red,
-                                            fontSize = 13.sp
+                                        .padding(vertical = 6.dp),
+                                )
+                            }
+                        }
+
+                        Text(
+                            "图标",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            iconPool.forEach { (iconName, icon) ->
+                                val selected = newIconName == iconName
+                                Surface(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clickable { newIconName = iconName },
+                                    shape = CircleShape,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHighest
+                                    },
+                                    tonalElevation = if (selected) 2.dp else 0.dp,
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = iconName,
+                                            tint = if (selected) {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
                                         )
                                     }
                                 }
@@ -577,9 +485,224 @@ object AddMainScreenFab : ClickableFeature() {
                         }
                     }
                 },
+                dismissButton = { TextButton(onDismiss) { Text("取消") } },
                 confirmButton = {
-                    TextButton(onDismiss) { Text("完成并关闭") }
+                    TextButton(
+                        onClick = {
+                            if (!canAdd) return@TextButton
+                            onAdd(
+                                FabItemConfig(
+                                    id = UUID.randomUUID().toString(),
+                                    type = newType,
+                                    name = newName.trim(),
+                                    iconName = newIconName,
+                                    targetActivity = if (newType == FabType.START_ACTIVITY) newActivity.trim() else null,
+                                )
+                            )
+                            onDismiss()
+                        },
+                        enabled = canAdd,
+                    ) { Text("添加") }
+                },
+            )
+        }
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    override fun onClick(context: ComponentActivity) {
+        showComposeDialog(context) {
+            var currentItems by remember { mutableStateOf(loadConfig()) }
+            var draggingIndex by remember { mutableStateOf<Int?>(null) }
+            var dragOffset by remember { mutableStateOf(0f) }
+            val listState = rememberLazyListState()
+            val coroutineScope = rememberCoroutineScope()
+
+            fun moveItem(from: Int, to: Int) {
+                if (from == to || from !in currentItems.indices || to !in currentItems.indices) return
+                val updated = currentItems.toMutableList().apply {
+                    add(to, removeAt(from))
                 }
+                currentItems = updated
+                saveConfig(updated)
+            }
+
+            AlertDialogContent(
+                title = { Text("FAB 悬浮按钮") },
+                text = {
+                    DefaultColumn {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("主屏幕快捷入口", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "长按拖动手柄调整顺序，改动会立即生效",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    showAddFabDialog(context, currentItems) { newItem ->
+                                        val updated = currentItems + newItem
+                                        currentItems = updated
+                                        saveConfig(updated)
+                                    }
+                                }
+                            ) {
+                                Icon(MaterialSymbols.OutlinedFilled.Add, contentDescription = null)
+                                Text("添加")
+                            }
+                        }
+
+                        if (currentItems.isEmpty()) {
+                            Text(
+                                "还没有快捷入口，点击右上角“添加”开始配置。",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 28.dp),
+                            )
+                        } else {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 420.dp)
+                                    .padding(top = 8.dp),
+                                userScrollEnabled = draggingIndex == null,
+                            ) {
+                                itemsIndexed(
+                                    items = currentItems,
+                                    key = { _, item -> item.id },
+                                ) { index, item ->
+                                    val isDragging = index == draggingIndex
+                                    val description = when (item.type) {
+                                        FabType.START_ACTIVITY -> item.targetActivity ?: "启动 Activity"
+                                        FabType.MARK_ALL_READ -> "将全部未读消息标记为已读"
+                                        FabType.MODULE_SETTINGS -> "打开模块设置"
+                                        FabType.RESTART_HOST -> "重新启动微信进程"
+                                        FabType.FORCE_STOP -> "终止微信进程"
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .zIndex(if (isDragging) 1f else 0f)
+                                            .graphicsLayer {
+                                                translationY = if (isDragging) dragOffset else 0f
+                                                scaleX = if (isDragging) 1.02f else 1f
+                                                scaleY = if (isDragging) 1.02f else 1f
+                                                shadowElevation = if (isDragging) 8.dp.toPx() else 0f
+                                            }
+                                            .then(if (isDragging) Modifier else Modifier.animateItem())
+                                            .padding(vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .pointerInput(item.id) {
+                                                    detectDragGesturesAfterLongPress(
+                                                        onDragStart = {
+                                                            draggingIndex = listState.layoutInfo.visibleItemsInfo
+                                                                .firstOrNull { it.key == item.id }
+                                                                ?.index
+                                                                ?: index
+                                                            dragOffset = 0f
+                                                        },
+                                                        onDragCancel = {
+                                                            draggingIndex = null
+                                                            dragOffset = 0f
+                                                        },
+                                                        onDragEnd = {
+                                                            draggingIndex = null
+                                                            dragOffset = 0f
+                                                        },
+                                                        onDrag = { change, amount ->
+                                                            change.consume()
+                                                            val currentIndex = draggingIndex ?: return@detectDragGesturesAfterLongPress
+                                                            dragOffset += amount.y
+                                                            val currentInfo = listState.layoutInfo.visibleItemsInfo
+                                                                .firstOrNull { it.index == currentIndex }
+                                                                ?: return@detectDragGesturesAfterLongPress
+                                                            val start = currentInfo.offset + dragOffset
+                                                            val end = start + currentInfo.size
+                                                            val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { targetInfo ->
+                                                                if (targetInfo.index == currentIndex) {
+                                                                    false
+                                                                } else if (dragOffset > 0f) {
+                                                                    targetInfo.index > currentIndex &&
+                                                                            end > targetInfo.offset + targetInfo.size / 2
+                                                                } else {
+                                                                    targetInfo.index < currentIndex &&
+                                                                            start < targetInfo.offset + targetInfo.size / 2
+                                                                }
+                                                            }
+                                                            if (target != null) {
+                                                                moveItem(currentIndex, target.index)
+                                                                dragOffset -= target.offset - currentInfo.offset
+                                                                draggingIndex = target.index
+                                                            }
+
+                                                            val viewport = listState.layoutInfo
+                                                            val center = currentInfo.offset + dragOffset + currentInfo.size / 2
+                                                            when {
+                                                                center < viewport.viewportStartOffset + 56 && listState.canScrollBackward ->
+                                                                    coroutineScope.launch { listState.scrollBy(-12f) }
+
+                                                                center > viewport.viewportEndOffset - 56 && listState.canScrollForward ->
+                                                                    coroutineScope.launch { listState.scrollBy(12f) }
+                                                            }
+                                                        },
+                                                    )
+                                                },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = MaterialSymbols.Outlined.Drag_handle,
+                                                contentDescription = "拖动以调整顺序",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = iconPool[item.iconName] ?: MaterialSymbols.OutlinedFilled.Add,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .padding(end = 4.dp),
+                                        )
+                                        Column(modifier = Modifier
+                                            .weight(1f)
+                                            .padding(start = 8.dp)) {
+                                            Text(item.name, fontWeight = FontWeight.Medium)
+                                            Text(
+                                                description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val updated = currentItems.filterNot { it.id == item.id }
+                                                currentItems = updated
+                                                saveConfig(updated)
+                                            },
+                                        ) {
+                                            Icon(
+                                                imageVector = MaterialSymbols.Outlined.Delete,
+                                                contentDescription = "删除 ${item.name}",
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onDismiss) { Text("完成") } },
             )
         }
     }

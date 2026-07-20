@@ -3,6 +3,8 @@ package dev.ujhhgtg.wekit.features.api.core
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.tencent.mm.api.IEmojiInfo
 import com.tencent.mm.opensdk.modelmsg.WXFileObject
 import com.tencent.mm.opensdk.modelmsg.WXMediaMessage
@@ -62,6 +64,7 @@ import java.lang.reflect.Proxy
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.UUID
 import kotlin.concurrent.thread
 import kotlin.io.path.Path
 import kotlin.io.path.absolutePathString
@@ -443,6 +446,24 @@ object WeMessageApi : ApiFeature(), IResolveDex {
     private lateinit var voiceOffsetField: Field       // 偏移量字段
 
     private const val TAG = "WeMessageApi"
+    private const val MAX_EMOJI_DIMENSION = 1024
+    private const val STICKER_SEND_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000L
+
+    private enum class StickerFileFormat {
+        GIF,
+        PNG,
+        WEBP,
+        WXGF,
+        JPEG,
+        OTHER,
+    }
+
+    private data class StickerFileInfo(
+        val format: StickerFileFormat,
+        val byteCount: Long,
+        val width: Int,
+        val height: Int,
+    )
 
     @SuppressLint("NonUniqueDexKitData")
     override fun resolveDex(dexKit: DexKitBridge) {
@@ -655,10 +676,98 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         }
     }
 
+    /**
+     * Sends a local sticker using the same format routing as FunBox's DLC/CVm/GFh path.
+     * WeChat's direct EmojiInfo upload accepts GIF and bounded PNG, but raw WebP can leave
+     * the resulting type-47 message permanently pending.
+     */
+    fun sendSticker(toUser: String, path: String): Boolean {
+        return runCatching {
+            val source = path.asPath
+            require(source.isRegularFile()) { "sticker source does not exist" }
+
+            cleanupStickerSendCache()
+            val info = inspectStickerFile(source)
+            WeLogger.i(
+                TAG,
+                "sticker inspected: format=${info.format}, bytes=${info.byteCount}, " +
+                        "dimensions=${info.width}x${info.height}"
+            )
+
+            when (info.format) {
+                StickerFileFormat.GIF -> {
+                    WeLogger.i(TAG, "sticker send route: direct emoji (GIF)")
+                    sendEmoji(toUser, path)
+                }
+
+                StickerFileFormat.PNG -> {
+                    if (info.fitsDirectEmoji()) {
+                        WeLogger.i(TAG, "sticker send route: direct emoji (PNG)")
+                        sendEmoji(toUser, path)
+                    } else {
+                        sendStickerAsImage(toUser, source, "PNG dimensions exceed direct emoji limit")
+                    }
+                }
+
+                StickerFileFormat.WEBP -> {
+                    if (!info.fitsDirectEmoji()) {
+                        sendStickerAsImage(toUser, source, "WebP dimensions exceed direct emoji limit")
+                    } else {
+                        val converted = createStickerSendTemp("png")
+                        try {
+                            convertStickerToPng(source, converted)
+                            WeLogger.i(
+                                TAG,
+                                "sticker converted: WEBP to PNG, bytes=${converted.fileSize()}"
+                            )
+                            WeLogger.i(TAG, "sticker send route: direct emoji (converted PNG)")
+                            sendEmoji(toUser, converted.absolutePathString())
+                        } finally {
+                            converted.deleteIfExists()
+                        }
+                    }
+                }
+
+                StickerFileFormat.WXGF -> {
+                    val converted = createStickerSendTemp("gif")
+                    try {
+                        convertWxgfToGif(source, converted)
+                        WeLogger.i(
+                            TAG,
+                            "sticker converted: WXGF to GIF, bytes=${converted.fileSize()}"
+                        )
+                        WeLogger.i(TAG, "sticker send route: direct emoji (converted GIF)")
+                        sendEmoji(toUser, converted.absolutePathString())
+                    } finally {
+                        converted.deleteIfExists()
+                    }
+                }
+
+                StickerFileFormat.JPEG,
+                StickerFileFormat.OTHER -> sendStickerAsImage(
+                    toUser,
+                    source,
+                    "format is not supported by direct emoji upload"
+                )
+            }
+        }.getOrElse {
+            WeLogger.e(TAG, "failed to send sticker", it)
+            false
+        }
+    }
+
     fun sendEmoji(toUser: String, path: String): Boolean {
         return runCatching {
             val md5 = WeServiceApi.processEmojiPath(path)
             val emojiThumb = WeServiceApi.saveEmojiThumb(md5)
+
+            WeLogger.i(
+                TAG,
+                "emoji imported: type=${emojiThumb.intField("field_type")}, " +
+                        "size=${emojiThumb.intField("field_size")}, " +
+                        "start=${emojiThumb.intField("field_start")}, " +
+                        "reserved4=${emojiThumb.intField("field_reserved4")}"
+            )
 
             val sendMethod = WeServiceApi.emojiMgrImpl.reflekt().firstMethod {
                 parameters {
@@ -685,9 +794,113 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         }
     }
 
+    private fun inspectStickerFile(path: Path): StickerFileInfo {
+        val header = ByteArray(12)
+        val headerSize = Files.newInputStream(path).use { input ->
+            var offset = 0
+            while (offset < header.size) {
+                val read = input.read(header, offset, header.size - offset)
+                if (read < 0) break
+                offset += read
+            }
+            offset
+        }
+
+        val format = when {
+            headerSize >= 3 && header.hasMagic(0, 0x47, 0x49, 0x46) -> StickerFileFormat.GIF
+            headerSize >= 8 && header.hasMagic(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a) -> StickerFileFormat.PNG
+            headerSize >= 12 &&
+                    header.hasMagic(0, 0x52, 0x49, 0x46, 0x46) &&
+                    header.hasMagic(8, 0x57, 0x45, 0x42, 0x50) -> StickerFileFormat.WEBP
+
+            headerSize >= 3 && header.hasMagic(0, 0xff, 0xd8, 0xff) -> StickerFileFormat.JPEG
+            isWxgf(path) -> StickerFileFormat.WXGF
+            else -> StickerFileFormat.OTHER
+        }
+
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        if (format != StickerFileFormat.WXGF) {
+            BitmapFactory.decodeFile(path.absolutePathString(), options)
+        }
+        return StickerFileInfo(format, path.fileSize(), options.outWidth, options.outHeight)
+    }
+
+    private fun StickerFileInfo.fitsDirectEmoji(): Boolean =
+        width in 1..MAX_EMOJI_DIMENSION && height in 1..MAX_EMOJI_DIMENSION
+
+    private fun ByteArray.hasMagic(offset: Int, vararg expected: Int): Boolean =
+        expected.indices.all { this[offset + it].toInt() and 0xff == expected[it] }
+
+    private fun isWxgf(path: Path): Boolean = runCatching {
+        val bytes = path.readBytes()
+        bytes.isNotEmpty() && MMWXGFJNI.isWxGF(bytes, bytes.size)
+    }.getOrElse {
+        WeLogger.w(TAG, "WXGF detection failed", it)
+        false
+    }
+
+    private fun convertStickerToPng(source: Path, output: Path) {
+        val bitmap = BitmapFactory.decodeFile(source.absolutePathString())
+            ?: error("failed to decode sticker bitmap")
+        try {
+            require(bitmap.width in 1..MAX_EMOJI_DIMENSION && bitmap.height in 1..MAX_EMOJI_DIMENSION) {
+                "sticker dimensions exceed direct emoji limit"
+            }
+            output.outputStream().use { stream ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                    "failed to encode sticker as PNG"
+                }
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun convertWxgfToGif(source: Path, output: Path) {
+        val converted = MMWXGFJNI.nativeWxamToGif(source.readBytes())
+        require(converted.size >= 3 && converted.hasMagic(0, 0x47, 0x49, 0x46)) {
+            "failed to decode WXGF sticker"
+        }
+        output.writeBytes(converted)
+    }
+
+    private fun createStickerSendTemp(extension: String): Path =
+        KnownPaths.moduleCache / "sticker-send-converted-${UUID.randomUUID()}.$extension"
+
+    private fun sendStickerAsImage(toUser: String, source: Path, reason: String): Boolean {
+        val extension = source.name.substringAfterLast('.', "img")
+            .lowercase()
+            .takeIf { it.length in 1..8 && it.all(Char::isLetterOrDigit) }
+            ?: "img"
+        val retained = KnownPaths.moduleCache /
+                "sticker-send-image-${System.currentTimeMillis()}-${UUID.randomUUID()}.$extension"
+        Files.copy(source, retained, StandardCopyOption.REPLACE_EXISTING)
+        WeLogger.i(TAG, "sticker send route: ordinary image ($reason), source retained in cache")
+        return sendImage(toUser, retained.absolutePathString()).also { success ->
+            if (!success) retained.deleteIfExists()
+        }
+    }
+
+    private fun cleanupStickerSendCache() {
+        val cutoff = System.currentTimeMillis() - STICKER_SEND_CACHE_MAX_AGE_MS
+        runCatching {
+            Files.list(KnownPaths.moduleCache).use { paths ->
+                paths.filter {
+                    it.isRegularFile() &&
+                            it.name.startsWith("sticker-send-") &&
+                            Files.getLastModifiedTime(it).toMillis() < cutoff
+                }.forEach(Path::deleteIfExists)
+            }
+        }.onFailure { WeLogger.w(TAG, "failed to clean stale sticker send cache", it) }
+    }
+
+    private fun Any.intField(name: String): Int? = runCatching {
+        reflekt().firstField { this.name = name; superclass() }.get() as? Int
+    }.getOrNull()
+
     fun sendEmojiByMd5(toUser: String, md5: String): Boolean {
         return runCatching {
-            WeLogger.i(TAG, "sending emoji: $md5 to $toUser")
+            WeLogger.i(TAG, "sending registered emoji")
             val emojiInfo = WeServiceApi.getEmojiInfoByMd5(md5)
 
             val sendMethod = WeServiceApi.emojiMgrImpl.reflekt().firstMethod {
@@ -710,7 +923,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
 
             true
         }.getOrElse {
-            WeLogger.e(TAG, "failed to send emoji by md5: $md5", it)
+            WeLogger.e(TAG, "failed to send registered emoji", it)
             false
         }
     }
@@ -894,7 +1107,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
 
             sendImageMethod.invoke(serviceObj, taskObj)
 
-            WeLogger.i(TAG, "sent image message to $toUser")
+            WeLogger.i(TAG, "image send task submitted")
             true
         } catch (e: Exception) {
             WeLogger.e(TAG, "failed to send image message", e)

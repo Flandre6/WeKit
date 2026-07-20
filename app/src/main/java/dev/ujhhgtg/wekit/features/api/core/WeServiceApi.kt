@@ -9,6 +9,7 @@ import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.core.ApiFeature
 import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.reflection.BString
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Modifier
@@ -144,7 +145,7 @@ object WeServiceApi : ApiFeature(), IResolveDex {
         return emojiMgrImpl.reflekt().firstMethod {
             parameters(Context::class, BString)
             returnType = BString
-        }.invoke(null, path)!! as String
+        }.invoke(HostInfo.application, path)!! as String
     }
 
     fun saveEmojiThumb(path: String): Any {

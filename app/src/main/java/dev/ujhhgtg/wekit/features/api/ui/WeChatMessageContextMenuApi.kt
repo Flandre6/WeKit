@@ -124,16 +124,6 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
         }
     }
 
-//    private val classChattingMessBox by dexClass {
-//        searchPackages("com.tencent.mm.ui.chatting.component")
-//        matcher {
-//            usingEqStrings(
-//                "MicroMsg.ChattingUI.FootComponent",
-//                "onNotifyChange event %s talker %s"
-//            )
-//        }
-//    }
-
     private var currentView: View? = null
 
     private fun getChattingContextFromOnSelectHandler(thisObject: Any): ChattingContext {

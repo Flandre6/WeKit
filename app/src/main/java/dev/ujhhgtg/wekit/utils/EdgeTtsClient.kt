@@ -38,6 +38,7 @@ import kotlin.io.path.outputStream
  */
 object EdgeTtsClient : AutoCloseable {
 
+    private const val TAG = "EdgeTTS"
     private const val TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
 
     // FIXME: remember to bump this version
@@ -82,11 +83,13 @@ object EdgeTtsClient : AutoCloseable {
         volume: String = "+0%",
         pitch: String = "+0Hz",
     ): Result<Path> = runCatching {
+        WeLogger.d(TAG, "synthesis start codePoints=${text.codePointCount(0, text.length)}")
         withContext(Dispatchers.IO) {
             // 先清洗掉服务端不支持的控制字符, 再做 XML 转义, 最后按字节长度分片。
             // 顺序必须是"转义后再分片", 这样分片逻辑才能避免切断 &amp; 这类实体。
             val escaped = escapeXml(removeIncompatibleCharacters(text))
             val chunks = splitByByteLength(escaped.toByteArray(Charsets.UTF_8), MAX_CHUNK_BYTES)
+            WeLogger.d(TAG, "synthesis prepared chunks=${chunks.size} thread=${Thread.currentThread().name}")
 
             var audioReceived = false
             outputMp3.outputStream().use { output ->
@@ -99,8 +102,11 @@ object EdgeTtsClient : AutoCloseable {
                 }
             }
             check(audioReceived) { "未收到任何音频数据, 可能是 Sec-MS-GEC 校验失败或网络问题" }
+            WeLogger.i(TAG, "synthesis completed chunks=${chunks.size}")
             outputMp3
         }
+    }.onFailure { error ->
+        WeLogger.e(TAG, "synthesis failed", error)
     }
 
     /**
@@ -122,6 +128,7 @@ object EdgeTtsClient : AutoCloseable {
             // "Handshake exception, expected status code 101 but was 403"。
             // 这里只对 403 做时钟校正重试, 其它情况原样抛出。
             if (!e.isHandshake403()) throw e
+            WeLogger.w(TAG, "WebSocket handshake returned 403; correcting clock skew and retrying", e)
             correctClockSkewFromServer()
             streamChunk(chunkText, voice, rate, volume, pitch, output)
         }
@@ -155,6 +162,7 @@ object EdgeTtsClient : AutoCloseable {
                 header(HttpHeaders.Cookie, "muid=${generateMuid()};")
             },
         ) {
+            WeLogger.d(TAG, "WebSocket connected")
             send(Frame.Text(buildSpeechConfigMessage()))
             send(Frame.Text(buildSsmlMessage(requestId, voice, rate, volume, pitch, chunkText)))
 
@@ -208,6 +216,7 @@ object EdgeTtsClient : AutoCloseable {
             ?: throw IllegalStateException("无法解析服务器 Date 头: $serverDate")
         val clientEpochSeconds = System.currentTimeMillis() / 1000.0 + clockSkewSeconds
         clockSkewSeconds += serverEpochSeconds - clientEpochSeconds
+        WeLogger.i(TAG, "clock skew corrected")
     }
 
     /** 解析 RFC 1123 (RFC 2616) 日期字符串为 Unix 秒。例: "Wed, 21 Oct 2015 07:28:00 GMT"。 */

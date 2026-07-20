@@ -1,9 +1,6 @@
 package dev.ujhhgtg.wekit.features.items.contacts
 
 import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.ReplacementSpan
 import android.view.View
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -95,29 +92,9 @@ object LimitGroupMemberNicknameLength : ClickableFeature(), WeChatMessageViewApi
         val maxLen = maxNicknameLength
         if (maxLen <= 0) return
 
-        var pureStart = 0
-        var pureEnd = currentText.length
-
-        // 精准识别并剥离由其他模块注入的 Prefix (身份标签) 和 Suffix (实名尾字)
-        if (currentText is Spanned) {
-            // 1. 识别开头的群身份 Badge (DisplayGroupMemberRoles 注入的是 ReplacementSpan)
-            val replacementSpans = currentText.getSpans(0, currentText.length, ReplacementSpan::class.java)
-            val roleSpan = replacementSpans.firstOrNull { currentText.getSpanStart(it) == 0 }
-            if (roleSpan != null) {
-                pureStart = currentText.getSpanEnd(roleSpan)
-                // 跳过标签后面的空格 " "
-                if (pureStart < currentText.length && currentText[pureStart] == ' ') {
-                    pureStart++
-                }
-            }
-
-            // 2. 识别结尾的实名尾字 (DisplayGroupMemberRealNamesLastChar 注入的是 ForegroundColorSpan)
-            val colorSpans = currentText.getSpans(0, currentText.length, ForegroundColorSpan::class.java)
-            val realNameSpan = colorSpans.firstOrNull { currentText.getSpanEnd(it) == currentText.length }
-            if (realNameSpan != null) {
-                pureEnd = currentText.getSpanStart(realNameSpan)
-            }
-        }
+        val nicknameRange = currentText.groupMemberNicknameRange()
+        val pureStart = nicknameRange.start
+        val pureEnd = nicknameRange.endExclusive
 
         if (pureStart >= pureEnd) return
 
